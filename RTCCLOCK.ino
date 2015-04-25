@@ -2,7 +2,7 @@
 
 // Stuarts code to drive Colourduino and TM1638 from GPS and DS1307 RTC
 
-// Reads GPS
+// Reads GPS on serial 3
 // if GPS invalid:Reads the RTC 
 // Displays time on TM1638
 // Handles reset of RTC
@@ -45,8 +45,8 @@ XX: Temperature
 #define MAXERRORCOUNT 5
 #define MAXMOUNTMSGLEN 128
 
-#define FIRSTMODULE 4
-#define LASTMODULE 7
+#define FIRSTMODULE 4  // i2c address of 1st module
+#define LASTMODULE 7	// i2c address of last module
 
 // Include the right libraries
 #include <Wire.h>
@@ -357,12 +357,13 @@ unsigned int z,m,l,w,x,y;
 			}
 			else {fontbyte=0;
 			}
-			z=(m*64)+(x*8);
+			
 			if(DEBUGMATRIX){
 				Serial.print("M:");
 				Serial.print(m,DEC);
 			}
 			for(y=0;y<8;y++){ // cycle thru bits
+			z=(m*64)+(y*8)+x;
 				if(fontbyte&1<<y){ // bit is set
 					if(DEBUGMATRIX)Serial.print("1");
 					matrix[z][0]=red;
@@ -376,7 +377,7 @@ unsigned int z,m,l,w,x,y;
 					matrix[z][2]=backblue;
 				
 				}
-				z++;
+				
 			}
 			if(DEBUGMATRIX)Serial.println();
 		}
