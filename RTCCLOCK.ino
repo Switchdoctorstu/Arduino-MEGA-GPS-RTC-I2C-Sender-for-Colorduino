@@ -16,11 +16,9 @@ update rtc from gps
 // Displays time on TM1638
 // Handles reset of RTC
 // Handles button updates to RTC
-
-// Need to Add
-// Add debug mode to clear serial noise
-// Add gps handler
-// Add display module handler
+// Added debug mode to clear serial noise
+// Added gps handler
+// Added I2C display module handler
 
 
 //****************************************************
