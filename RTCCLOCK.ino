@@ -21,6 +21,7 @@ OK: make packets fixed length = 16 bytes
 OK: stx,type,index,data*11,chk,cr
 OK: sending char packets
 XX: BST offset
+XX: Temperature
 
 */
 // Added debug mode to clear serial noise
@@ -105,7 +106,6 @@ int i2cmagno=0;
 int fontheight=7;
 int fontwidth=5;
 
-unsigned long magnocount,magnolast,magnointerval = 2000;
 
 // gps handling
 String gpsfixvalid="N";
@@ -337,17 +337,17 @@ char backred=0x00;
 char backgreen=0x00;
 char backblue=0x00;
 char red=0xa0;
-char green = 0xFF;
-char blue=0x00;
+char green = 0x00;
+char blue=0xFF;
 char fontbyte;
 char mybyte;
 unsigned int z,m,l,w,x,y;
 
 	if(gpsfixvalid=="V"){
-		backred=0x08;
+		backred=0x04;
 	}
 	if(gpsfixvalid=="A"){
-		backgreen=0x08;
+		backgreen=0x04;
 	}
 // try again
 	for(m=0;m<4;m++){  // Module Loop
@@ -1084,12 +1084,7 @@ where:
 	}
 }	
 
-void checki2c(){
-	if(millis()>=magnocount){
-		magnocount=magnocount+magnointerval;
-		reportxyz();
-	}
-}
+
 
 void reportxyz(){
 	int x,y,z=0; //triple axis data
