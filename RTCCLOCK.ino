@@ -26,8 +26,8 @@ update rtc from gps
 #define RTCMODE 0
 #define GPSMODE 1
 #define NUMMODES 2
-#define DEBUG_MODE true
-#define DEBUGMATRIX true
+#define DEBUG_MODE false
+#define DEBUGMATRIX false
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -325,37 +325,41 @@ void buildMatrix(){
 	int character = (millis()/displayUpdateInterval % 64); // rotate character
 // start by just copying chars to buffer
 int intensity = 128;
-char backred=0x00;
+char backred=0x08;
 char backgreen=0x00;
-char backblue=0x00;
-char red=0xF0;
-char green = 0xF1;
-char blue=0xFF;
+char backblue=0x20;
+char red=0xa0;
+char green = 0xFF;
+char blue=0x00;
 char fontbyte;
 char mybyte;
 unsigned int z,m,l,w,x,y;
 
 // try again
 	for(m=0;m<4;m++){  // Module Loop
-		for(x=0;x<fontwidth;x++){
-			fontbyte=font_5x7[character][x];
+		for(x=0;x<8;x++){
+			if(x<fontwidth){
+				fontbyte=font_5x7[character][x];
+			}
+			else {fontbyte=0;
+			}
 			z=(m*64)+(x*8);
 			if(DEBUGMATRIX){
 				Serial.print("M:");
 				Serial.print(m,DEC);
-			for(y=0;y<7;y++){ // cycle thru bits
+			}
+			for(y=0;y<8;y++){ // cycle thru bits
 				if(fontbyte&1<<y){ // bit is set
 					if(DEBUGMATRIX)Serial.print("1");
-				matrix[z][0]=red;
-				matrix[z][1]=blue;
-				matrix[z][2]=green;
-				
+					matrix[z][0]=red;
+					matrix[z][1]=green;
+					matrix[z][2]=blue;
 				} 
 				else { // bit is not set
 					if(DEBUGMATRIX)Serial.print("0");
-				matrix[z][0]=backred;
-				matrix[z][1]=backblue;
-				matrix[z][2]=backgreen;
+					matrix[z][0]=backred;
+					matrix[z][1]=backgreen;
+					matrix[z][2]=backblue;
 				
 				}
 				z++;
@@ -363,47 +367,10 @@ unsigned int z,m,l,w,x,y;
 			if(DEBUGMATRIX)Serial.println();
 		}
 	}
-
-
-/*
-for(m=0;m<4;m++){
-	for( l=0;l<fontheight;l++){
-		if(DEBUGMATRIX){
-				Serial.print(z);
-				Serial.print( "M:");
-			Serial.print(m,HEX);
-			Serial.print(" L:");
-			Serial.print(l,HEX);
-			
-			}
-		for( w=0;w<fontwidth;w++){
-		fontbyte=font_5x7[character-32][w]; // get a row from the font table
-			
-			mybyte=fontbyte&(64>>l); // mask off bit we're interested in
-			z=((m*64)+(l*8)+w);
-			if(mybyte!=0){
-				if(DEBUGMATRIX){
-					Serial.print("1");
-				}
-				matrix[z][0]=red;
-				matrix[z][1]=blue;
-				matrix[z][2]=green;
-				
-			} else{
-				if (DEBUGMATRIX)Serial.print("0");
-				matrix[z][0]=backred;
-				matrix[z][1]=backblue;
-				matrix[z][2]=backgreen;
-				
-			}
-			
-			if(DEBUGMATRIX)Serial.println();
-		}
-	} */
 }
 
 	
-}
+
 
 void drawToMatrix(){
 	// draw something out to LED grid displays
