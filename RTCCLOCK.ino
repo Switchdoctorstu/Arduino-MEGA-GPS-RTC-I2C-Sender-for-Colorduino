@@ -1,21 +1,28 @@
 /*
-try raster 3x8x8
-make packets fixed length
-16 bytes
-stx,type,index,data*11,chk,cr
 
-sending char packets
-year offset ok
-V gps incoming seems ok
-parsing time from gps
-update rtc from gps
-*/
-// Stuarts code to drive DS1307 RTC and TM1638 Display
+// Stuarts code to drive Colourduino and TM1638 from GPS and DS1307 RTC
 
-// Reads the RTC 
+// Reads GPS
+// if GPS invalid:Reads the RTC 
 // Displays time on TM1638
 // Handles reset of RTC
-// Handles button updates to RTC
+// Handles button updates to RTC  < needs fixing
+// Sends display to array of 4 Colorduino displays on I2C
+
+Gets time from RTC or GPS receiver on Serial3
+Sends I2C Character & Raster to Colorduino Receiver
+
+All code attributed to original authors, i've put this together from 
+so many sources that i can't track them all.
+
+
+Currently working on:
+OK: make packets fixed length = 16 bytes
+OK: stx,type,index,data*11,chk,cr
+OK: sending char packets
+XX: BST offset
+
+*/
 // Added debug mode to clear serial noise
 // Added gps handler
 // Added I2C display module handler
@@ -28,6 +35,7 @@ update rtc from gps
 #define NUMMODES 2
 #define DEBUG_MODE false
 #define DEBUGMATRIX false
+#define DEBUGTIME false
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -51,8 +59,8 @@ update rtc from gps
 // TM1638(byte dataPin, byte clockPin, byte strobePin, boolean activateDisplay = true, byte intensity = 7);
 TM1638 dm (5, 6, 7);
 tmElements_t tm;   	// storage for time components
-unsigned long waitcheckTime=0;
-unsigned long waitcheckButtons=0;
+unsigned long waitcheckTime=0; // timer for time checking
+unsigned long waitcheckButtons=0; // timer for buttons
 unsigned long intervalcheckTime=1000;
 unsigned long intervalcheckButtons=500;
 unsigned long reportTime=1000;
@@ -325,9 +333,9 @@ void buildMatrix(){
 	int character = (millis()/displayUpdateInterval % 64); // rotate character
 // start by just copying chars to buffer
 int intensity = 128;
-char backred=0x08;
+char backred=0x00;
 char backgreen=0x00;
-char backblue=0x20;
+char backblue=0x00;
 char red=0xa0;
 char green = 0xFF;
 char blue=0x00;
@@ -335,6 +343,12 @@ char fontbyte;
 char mybyte;
 unsigned int z,m,l,w,x,y;
 
+	if(gpsfixvalid=="V"){
+		backred=0x08;
+	}
+	if(gpsfixvalid=="A"){
+		backgreen=0x08;
+	}
 // try again
 	for(m=0;m<4;m++){  // Module Loop
 		for(x=0;x<8;x++){
@@ -584,54 +598,6 @@ void checkDisplayTimer(){
 	
 }
 
-/*void drawVUMeter()	{
-	int sensorvalue = analogRead(sensorPin);
-	word LEDmask=0x00FF;
-	word tmask;
-	word imask=0x00FF;
-// calculate vumask
-	// input goes to 1024
-	Serial.print("Sensor Value:");
-	Serial.println(sensorvalue);
-
-	tmask=((sensorvalue+127)/128);
-	LEDmask=imask<<tmask;
-	LEDmask=LEDmask^0xFFFF;
-	Serial.print("LEDmask:");
-	Serial.println(LEDmask,HEX);
-	dm.setLEDs(LEDmask);
-
-}
-
-void drawFrequency() 	{
-	// calculate the interrupt frequency
-	thistime=millis();
-	
-	float delta = thistime-lasttime;
-	float freq = interrupts*delta/1000;
-	Serial.print("Frequency:");
-	Serial.println(String(freq));
-	lasttime=thistime;
-	// write freq to display
-	// setDisplayDigit(byte digit, byte pos, boolean dot, const byte numberFont[] = NUMBER_FONT);
-	// setDisplay(const byte values[], unsigned int length = 8);
-    byte d[7];
-	String Fstring;
-	Fstring=String(freq);
-	int flen = Fstring.length();
-	byte t;
-	for(t=0;t++;t<flen)
-	{
-		// dm.setDisplayDigit(Fstring[t], t, 0);
-		//dm.setDisplayToString(getrtctime(),(dots * 80),pos);
-  
-		d[t]=Fstring[t];
-	}
-	//dm.setDisplay(d, 8);
-    dm.setDisplayToString(Fstring,(dots * 80),0);
-  
-}
-*/
 void checkButtons(){
   if (millis() >= waitcheckButtons) {
     // dm.setLEDs(0);
@@ -856,11 +822,7 @@ void scani2c(){
       Serial.print(address,HEX);
       Serial.println("  !");
 		i2caddresses[i2cdevicecount]=address;  // store the found device address
-		if(address==MAGNOADDRESS){
-			i2cmagno=1;    // magnetometer detected
-// read 1st 50 bytes
-			testmagno(); 
-			}
+
 		i2cdevicecount++;
     }
     else if (error==4) 
@@ -876,89 +838,6 @@ void scani2c(){
   else
     Serial.println("I2C Scan complete \n");
 
-}
-
-void testmagno(){
-	setupmagno();  // set up the magno
-	int count;
-	int address=MAGNOADDRESS;
-	int error;
-	int wa,x;
-	int errorcount=0;
-	//Tell the HMC5883 where to begin reading data
-	for(errorcount=0;errorcount<=MAXERRORCOUNT;errorcount++)
-	{
-		Wire.beginTransmission(address);
-		Wire.write(0x03); // set pointer to read 3
-		//Wire.write(0x06);
-		error=Wire.endTransmission();
-		if (error == 0)
-		{
-		  Serial.println("Set pointer ok");
-		errorcount=MAXERRORCOUNT;
-		} 
-		else
-		{
-		Serial.println("Set pointer failed:"+String(error));
-		errorcount++;
-		}
-		delay(50);
-	}
-	//Read data 
-	Wire.requestFrom(address, 1,1);
-	delay(60);
-	wa = Wire.available();
-	count=0;
-	while(1<=wa) {
-	
-		Serial.println(String(wa)+" Bytes available");
-	  
-		x = Wire.read(); // read a byte
-		Serial.println("Read: "+String(x));
-	  
-		count++;
-		if(100>=count){ // test for 100 chars read
-		wa = 0;
-		} else
-		{
-			Wire.requestFrom(address, 1);
-			delay(60);
-			wa=Wire.available();
-		}
-	}
-	
-	Serial.print(count,DEC);
-    Serial.print(" bytes read from ");
-	Serial.println(address,HEX);
-	
-}
-void setupmagno(){
-	//Put the HMC5883 IC into the correct operating mode
-  int address=MAGNOADDRESS;
-  Wire.beginTransmission(address); //open communication with HMC5883
-
-  //Write CRA (00) – send 0x3C 0x00 0x70 (8-average, 15 Hz default, normal measurement)
-   
-  Wire.write(0x00); 
-  Wire.write(0x70); 
-
-  //Write CRB (01) – send 0x3C 0x01 0xA0 (Gain=5, or any other desired gain)
-  Wire.write(0x01); 
-  Wire.write(0xA0); 
-
-  //Write Mode (02) – send 0x3C 0x02 0x00 (Continuous-measurement mode)
-  //Wire.write(0x3C); 
-  Wire.write(0x02); 
-  Wire.write(0x00); 
-
-  int error = Wire.endTransmission();
-if (error == 0)
-    {
-      Serial.println("Setup Magno ok");
-	  delay(100);
-    } else{
-	Serial.println("Set Magno failed:"+ String(error));
-    }
 }
 
 void GetGPSData(){
