@@ -227,8 +227,6 @@ const unsigned char font_5x7[][5] = {
 };
 
 
-
-
 void handleInterrupt() {
 	interrupts++;
 }
@@ -330,7 +328,8 @@ void buildMatrix(){
 	// if we set displaymode to 0x01
 	// matrix =ColourRGB[256]
 	clearMatrix();  // clear the dot matrix buffer
-	int character = (millis()/displayUpdateInterval % 64); // rotate character
+	char timearray[6];
+	//int character = (millis()/displayUpdateInterval % 64); // rotate character
 // start by just copying chars to buffer
 int intensity = 128;
 char backred=0x00;
@@ -342,6 +341,12 @@ char blue=0xFF;
 char fontbyte;
 char mybyte;
 unsigned int z,m,l,w,x,y;
+	// get hrs and mins in usable format
+	if(gpsfixvalid="A"){  // check for valid time from GPS
+		//reload tm and write it to the RTC
+		//long int t=gpsfixtime.toInt();	
+		gpsfixtime.toCharArray(timearray,6);
+	}	
 
 	if(gpsfixvalid=="V"){
 		backred=0x04;
@@ -353,7 +358,7 @@ unsigned int z,m,l,w,x,y;
 	for(m=0;m<4;m++){  // Module Loop
 		for(x=0;x<8;x++){
 			if(x<fontwidth){
-				fontbyte=font_5x7[character][x];
+				fontbyte=font_5x7[timearray[m]-32][x];
 			}
 			else {fontbyte=0;
 			}
