@@ -330,6 +330,7 @@ void buildMatrix(){
 	// matrix =ColourRGB[256]
 	clearMatrix();  // clear the dot matrix buffer
 	char timearray[6];
+	String rtctimestring="000000";
 	//int character = (millis()/displayUpdateInterval % 64); // rotate character
 // start by just copying chars to buffer
 int intensity = 128;
@@ -348,7 +349,11 @@ int x;
 		//reload tm and write it to the RTC
 		//long int t=gpsfixtime.toInt();	
 		gpsfixtime.toCharArray(timearray,6);
-	}	
+	}	else{
+		// get rtc time instead
+		rtctimestring=getrtctime();
+		rtctimestring.toCharArray(timearray,6);
+	}
 
 	if(gpsfixvalid=="V"){
 		backred=0x04;
