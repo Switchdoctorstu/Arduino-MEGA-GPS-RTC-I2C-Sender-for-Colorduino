@@ -22,6 +22,7 @@ OK: stx,type,index,data*11,chk,cr
 OK: sending char packets
 XX: BST offset
 XX: Temperature
+XX: startup time from rtc 
 
 */
 // Added debug mode to clear serial noise
@@ -35,7 +36,7 @@ XX: Temperature
 #define GPSMODE 1
 #define NUMMODES 2
 #define DEBUG_MODE false
-#define DEBUGMATRIX true
+#define DEBUGMATRIX false
 #define DEBUGTIME false
 // GPS Definitions
 #define GPSBUFFERLEN 128
@@ -343,7 +344,7 @@ char mybyte;
 unsigned int z,m,l,w,y;
 int x;
 	// get hrs and mins in usable format
-	if(gpsfixvalid=="A"){  // check for valid time from GPS
+	if(gpsfixvalid="A"){  // check for valid time from GPS
 		//reload tm and write it to the RTC
 		//long int t=gpsfixtime.toInt();	
 		gpsfixtime.toCharArray(timearray,6);
@@ -390,15 +391,11 @@ int x;
 	}
 }
 
-	
-
-
-void drawToMatrix(){
-	// draw something out to LED grid displays
+void drawToMatrix(){  	// draw something out to LED grid displays
 	char c;
 	char timearray[6];
 	// get hrs and mins in usable format
-	if(gpsfixvalid="A"){  // check for valid time from GPS
+	if(gpsfixvalid=="A"){  // check for valid time from GPS
 		//reload tm and write it to the RTC
 		long int t=gpsfixtime.toInt();	
 		gpsfixtime.toCharArray(timearray,6);
@@ -811,7 +808,7 @@ void scani2c(){
 	int error;
   int address;
 
-  Serial.println("Scanning...");
+  Serial.println("Scanning I2C...");
 
   i2cdevicecount = 0;
   for(address = 1; address < 127; address++ ) 
@@ -1092,62 +1089,6 @@ where:
 }	
 
 
-
-void reportxyz(){
-	int x,y,z=0; //triple axis data
-	int address=MAGNOADDRESS;
-	int error;
-  //Tell the HMC5883 where to begin reading data
-  Wire.beginTransmission(address);
-  Wire.write(0x03); // set pointer to read 3
-  //Wire.write(0x06);
-  
-  error=Wire.endTransmission();
-if (error == 0)
-    {
-      Serial.println("Set pointer ok");
-    } else{
-	Serial.println("Set pointer failed:"+String(error));
-    }
-  delay(60);
-
-  //Read data from each axis, 2 registers per axis
-  Wire.requestFrom(address, 6);
-  // delay(10);
-  int wa = Wire.available();
-  Serial.println(String(wa)+" Bytes available");
-  if(6<=wa){
-    x = Wire.read()<<8; //X msb
-    x |= Wire.read(); //X lsb
-    z = Wire.read()<<8; //Z msb
-    z |= Wire.read(); //Z lsb
-    y = Wire.read()<<8; //Y msb
-    y |= Wire.read(); //Y lsb
-	//Print out values of each axis
-  Serial.print("x: ");
-  Serial.print(x);
-  Serial.print("  y: ");
-  Serial.print(y);
-  Serial.print("  z: ");
-  Serial.println(z);
-  }
-  else{
-	  Serial.print("not enough data ");
-          Serial.print(wa,DEC);
-          Serial.print(" available on device");
-		  Serial.println(address,HEX);
-  }
-  // reset the pointer
-  //Wire.beginTransmission(address);
-  // Wire.write(0x3C); // set pointer to read 3
-  //Wire.write(0x03);
-  
-  //Wire.endTransmission();
-
-  
-
-}
-
 void PrintGPSMessage(){
 	// dump the current GPS buffer to the serial port 
 	int i;
@@ -1156,47 +1097,3 @@ void PrintGPSMessage(){
 }
 	Serial.println();
 }
-
-void GetMountMessage(){
-	// Mount is in serial1
-	
-		char lf = 0x3B;
-		char inchar;
-		
-		inchar = Serial1.read();
-		// strip out nasties
-		if(inchar>32){
-			if(inchar<128){
-				msgfrommount[msgfrommountindex]=inchar;
-				msgfrommountindex++;
-			}
-		}
-		if (msgfrommountindex>(MAXMOUNTMSGLEN-1)){
-			// gps message buffer over-run (no CR seen)
-			Serial.print("Mount Message Buffer Overrun");
-			// PrintGPSMessage();
-			msgfrommountindex=0;
-			exit;
-		}
-	
-		if(inchar==lf){
-			//check for valid message
-			
-				// end of message
-				// copy to String
-				msgfrommount[msgfrommountindex]='\0';  // null terminate
-				frommountstring=msgfrommount;
-				// Process GPS Message 
-				if(debugging=='Y'){
-					Serial.print("Mount:");
-					Serial.println(frommountstring);
-				}
-				
-				// Mount message parser here 
-			
-			msgfrommountindex=0; // reset the buffer
-			exit;
-		}
-	
-}
-
