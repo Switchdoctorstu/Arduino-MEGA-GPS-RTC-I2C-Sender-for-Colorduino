@@ -35,7 +35,7 @@ XX: Temperature
 #define GPSMODE 1
 #define NUMMODES 2
 #define DEBUG_MODE false
-#define DEBUGMATRIX false
+#define DEBUGMATRIX true
 #define DEBUGTIME false
 // GPS Definitions
 #define GPSBUFFERLEN 128
@@ -340,7 +340,8 @@ char green = 0x00;
 char blue=0xFF;
 char fontbyte;
 char mybyte;
-unsigned int z,m,l,w,x,y;
+unsigned int z,m,l,w,y;
+int x;
 	// get hrs and mins in usable format
 	if(gpsfixvalid="A"){  // check for valid time from GPS
 		//reload tm and write it to the RTC
@@ -356,7 +357,7 @@ unsigned int z,m,l,w,x,y;
 	}
 // try again
 	for(m=0;m<4;m++){  // Module Loop
-		for(x=0;x<8;x++){
+		for(x=7;x>-1;x--){
 			if(x<fontwidth){
 				fontbyte=font_5x7[timearray[m]-32][x];
 			}
@@ -369,7 +370,7 @@ unsigned int z,m,l,w,x,y;
 			}
 			for(y=0;y<8;y++){ // cycle thru bits
 			z=(m*64)+(y*8)+x;
-				if(fontbyte&1<<y){ // bit is set
+				if(fontbyte&128>>y){ // bit is set
 					if(DEBUGMATRIX)Serial.print("1");
 					matrix[z][0]=red;
 					matrix[z][1]=green;
