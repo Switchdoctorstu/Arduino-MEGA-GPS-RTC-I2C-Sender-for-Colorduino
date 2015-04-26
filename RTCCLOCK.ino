@@ -343,7 +343,7 @@ char mybyte;
 unsigned int z,m,l,w,y;
 int x;
 	// get hrs and mins in usable format
-	if(gpsfixvalid="A"){  // check for valid time from GPS
+	if(gpsfixvalid=="A"){  // check for valid time from GPS
 		//reload tm and write it to the RTC
 		//long int t=gpsfixtime.toInt();	
 		gpsfixtime.toCharArray(timearray,6);
