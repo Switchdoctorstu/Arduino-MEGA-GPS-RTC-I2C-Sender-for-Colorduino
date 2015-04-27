@@ -381,7 +381,7 @@ int x;
 				Serial.print(m,DEC);
 			}
 			for(y=0;y<8;y++){ // cycle thru bits
-			z=(m*8)+(y*32)+x;
+			z=(m*6)+(y*32)+x;
 				if(fontbyte&128>>y){ // bit is set
 					if(DEBUGMATRIX)Serial.print("1");
 					matrix[z][0]=red;
