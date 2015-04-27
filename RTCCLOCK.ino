@@ -353,13 +353,19 @@ int x;
 		// get rtc time instead
 		rtctimestring=getrtctime();
 		rtctimestring.toCharArray(timearray,6);
+		backgreen=0x04;
+		backblue=0x04;
 	}
 
 	if(gpsfixvalid=="V"){
+		backblue=0x00;
 		backred=0x04;
+		
 	}
 	if(gpsfixvalid=="A"){
 		backgreen=0x04;
+		backred=0x00;
+		backblue=0x00;
 	}
 // try again
 	for(m=0;m<4;m++){  // Module Loop
@@ -375,7 +381,7 @@ int x;
 				Serial.print(m,DEC);
 			}
 			for(y=0;y<8;y++){ // cycle thru bits
-			z=(m*64)+(y*8)+x;
+			z=(m*8)+(y*32)+x;
 				if(fontbyte&128>>y){ // bit is set
 					if(DEBUGMATRIX)Serial.print("1");
 					matrix[z][0]=red;
@@ -460,7 +466,7 @@ void drawToMatrix(){  	// draw something out to LED grid displays
 					char t=line*16+colour;
 					Wire.write(t);
 					if(DEBUGMATRIX) Serial.print("A:"+String(m)+" ");
-					int z=((m-FIRSTMODULE)*64)+(line*8);
+					int z=((m-FIRSTMODULE)*8)+(line*32);
 					for(int p=z;p<(z+8);p++){
 						Wire.write(matrix[p][colour]);
 						if(DEBUGMATRIX) {
