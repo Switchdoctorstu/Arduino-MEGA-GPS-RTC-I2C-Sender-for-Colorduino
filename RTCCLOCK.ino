@@ -1,7 +1,17 @@
 /*
 
 // Stuarts code to drive Colourduino and TM1638 from GPS and DS1307 RTC
-
+*	This code is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU Lesser General Public
+ *	License as published by the Free Software Foundation; either
+ *	version 2.1 of the License, or (at your option) any later version.
+ *	
+ *	This library is distributed in the hope that it will be useful,
+ *	but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *	Lesser General Public License for more details.
+ 
+ 
 // Reads GPS on serial 3
 // if GPS invalid:Reads the RTC 
 // Displays time on TM1638
@@ -21,8 +31,9 @@ OK: make packets fixed length = 16 bytes
 OK: stx,type,index,data*11,chk,cr
 OK: sending char packets
 XX: BST offset
+XX: RF handler
 XX: Temperature
-XX: startup time from rtc 
+OK: startup time from rtc 
 
 */
 // Added debug mode to clear serial noise
@@ -35,9 +46,11 @@ XX: startup time from rtc
 #define RTCMODE 0
 #define GPSMODE 1
 #define NUMMODES 2
-#define DEBUG_MODE false
+#define DEBUGI2C false
 #define DEBUGMATRIX false
 #define DEBUGTIME false
+#define DEBUGGPS false
+#define DEBUGREPORT false
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -45,6 +58,7 @@ XX: startup time from rtc
 #define MAGNOADDRESS 0x1e
 #define MAXERRORCOUNT 5
 #define MAXMOUNTMSGLEN 128
+#define GPSPASSTHRU false  // enable pass-thru of GPS data so PC sees GPS
 
 #define FIRSTMODULE 4  // i2c address of 1st module
 #define LASTMODULE 7	// i2c address of last module
@@ -52,15 +66,21 @@ XX: startup time from rtc
 // Include the right libraries
 #include <Wire.h>
 #include <Time.h>
-#include <DS1307RTC.h>
-#include <TM1638.h>
+#include <DS1307RTC.h>  // RTC
+#include <TM1638.h>  // LED Display 
 #include <String.h>
 #include <Adafruit_BMP085.h>
 
-// Declare all the global vars
+// RF includes
+#include <SPI.h>
+#include "nRF24L01.h"  // Radio Libraries
+#include "RF24.h" // Radio
+
 // TM1638(byte dataPin, byte clockPin, byte strobePin, boolean activateDisplay = true, byte intensity = 7);
 TM1638 dm (5, 6, 7);
 tmElements_t tm;   	// storage for time components
+
+// Declare all the global vars
 unsigned long waitcheckTime=0; // timer for time checking
 unsigned long waitcheckButtons=0; // timer for buttons
 unsigned long intervalcheckTime=1000;
@@ -80,7 +100,7 @@ boolean dots=0;
 boolean moduleOff=0;
 // setup mode 
 int currentmode=RTCMODE;
-int displaymode=1; // major display mode 0=char 1=raster
+int displaymode=0; // major display mode 0=char 1=raster
 boolean rtcokFlag=false;
 boolean gpstimeokFlag=false;
 // array of month names
@@ -106,6 +126,7 @@ int trigger=0;
 int i2cmagno=0;
 int fontheight=7;
 int fontwidth=5;
+char timearray[6]; // string for current valid time
 
 
 // gps handling
@@ -127,7 +148,7 @@ String GPSzm="00";
 int argcount=0;  // number of arguments
 
 
-// buffer to hold raster 4*8*8
+// buffer to hold raster 4 modules *8*8
 unsigned char matrix[256][3];
 const unsigned char font_5x7[][5] = { 
         { 0x00, 0x00, 0x00, 0x00, 0x00 },               /*   - 0x20 - 32 */
@@ -227,13 +248,12 @@ const unsigned char font_5x7[][5] = {
         { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
 };
 
-
 void handleInterrupt() {
 	interrupts++;
 }
 
-void readrtc(){
-
+void gettime(){
+	String rtctimestring="000000";
   if (RTC.read(tm)) {
 		rtcokFlag=true;
 	}	
@@ -246,8 +266,18 @@ void readrtc(){
 		Serial.println("DS1307 read error!  Please check the circuitry.");
 		Serial.println();
     }
-    
   }
+  // get hrs and mins in usable format
+	if(gpsfixvalid="A"){  // check for valid time from GPS
+		gpsfixtime.toCharArray(timearray,6);
+		currentmode=GPSMODE;
+	}	
+	else{
+		// get rtc time instead
+		rtctimestring=getrtctime();
+		rtctimestring.toCharArray(timearray,6);
+			currentmode=RTCMODE;
+	}
   
 }
 
@@ -298,13 +328,10 @@ void loop(){
 
 // main code here - runs repeatedly
 		timeNow=millis();
-		if(currentmode==RTCMODE)
-		{
-		readrtc();   // read the time from the RTC chip 
-		}
+		gettime();   // read the time from the RTC or GPS 
 		checkDisplayTimer();
 		checkButtons();
-		checkReport(); // see if we need to report
+		if(DEBUGREPORT)checkReport(); // see if we need to report
 		// checki2c(); // Check for i2c communications - magno / temp
 	  
 		// check for GPS data
@@ -329,14 +356,14 @@ void buildMatrix(){
 	// if we set displaymode to 0x01
 	// matrix =ColourRGB[256]
 	clearMatrix();  // clear the dot matrix buffer
-	char timearray[6];
-	String rtctimestring="000000";
+	
+	
 	//int character = (millis()/displayUpdateInterval % 64); // rotate character
-// start by just copying chars to buffer
+// start by just copying time chars to buffer
 int intensity = 128;
 char backred=0x00;
-char backgreen=0x00;
-char backblue=0x00;
+char backgreen=0x04;
+char backblue=0x04;
 char red=0xa0;
 char green = 0x00;
 char blue=0xFF;
@@ -344,21 +371,10 @@ char fontbyte;
 char mybyte;
 unsigned int z,m,l,w,y;
 int x;
-	// get hrs and mins in usable format
-	if(gpsfixvalid="A"){  // check for valid time from GPS
-		//reload tm and write it to the RTC
-		//long int t=gpsfixtime.toInt();	
-		gpsfixtime.toCharArray(timearray,6);
-	}	else{
-		// get rtc time instead
-		rtctimestring=getrtctime();
-		rtctimestring.toCharArray(timearray,6);
-		backgreen=0x04;
-		backblue=0x04;
-	}
-
+	// time should be in timearray
 	if(gpsfixvalid=="V"){
-		backblue=0x00;
+		backgreen=0x00;
+	backblue=0x00;
 		backred=0x04;
 		
 	}
@@ -367,7 +383,7 @@ int x;
 		backred=0x00;
 		backblue=0x00;
 	}
-// try again
+// build the raster
 	for(m=0;m<4;m++){  // Module Loop
 		for(x=7;x>-1;x--){
 			if(x<fontwidth){
@@ -402,9 +418,8 @@ int x;
 	}
 }
 
-void drawToMatrix(){  	// draw something out to LED grid displays
+void sendToMatrix(){  	// draw something out to LED grid displays
 	char c;
-	char timearray[6];
 	// get hrs and mins in usable format
 	if(gpsfixvalid=="A"){  // check for valid time from GPS
 		//reload tm and write it to the RTC
@@ -440,7 +455,7 @@ void drawToMatrix(){  	// draw something out to LED grid displays
 			Wire.write(0x0d);
 			Wire.endTransmission();
 			delay(10);
-			if(DEBUG_MODE){
+			if(DEBUGI2C){
 				Serial.println("sent "+ String(c) + " To Address:" +String(a));
 			}
 		}
@@ -505,6 +520,26 @@ void sendflip(int m){
 					
 }
 	
+void sendclear(int m, int r,int g, int b){ // send clear screen to matrix
+// clear screen to 
+			// protocol goes:
+			//  0 	stx
+			//  1 	0x04   = type 4 = Fill
+			//  2 	red
+			// 	3	green
+			//	4  	blue
+			// etx in 15
+					Wire.beginTransmission(m);
+					Wire.write(0x23);  // stx= '#'
+					Wire.write(0x04); // type = 0x04 = fill screen
+					Wire.write(r);
+					Wire.write(g);
+					Wire.write(b);
+					for(int n=0;n<10;n++) Wire.write(0x00); // fill buffer
+					Wire.write(0x0d);  // etx= CR
+					Wire.endTransmission();
+					delay(10);
+}	
 void checkRTCupdate(){
 	if(timeNow>RTCNextUpdateTime){
 		RTCNextUpdateTime=timeNow+RTCUpdateInterval;
@@ -551,11 +586,11 @@ void checkDisplayTimer(){
   if(timeNow>=displayNextUpdateTime){
 	  displayNextUpdateTime=timeNow+displayUpdateInterval; // reset LED display timer
 	  buildMatrix(); // build the raster to display on the matrix
-	  drawToMatrix();
+	  sendToMatrix();
   }
 }
 
-	void checkReport() {
+void checkReport() {
 		if( timeNow>= reportTime){ // if we're due
 			reportTime=timeNow+reportInterval; // reset interval
 			Serial.println("*******************************");
@@ -589,29 +624,9 @@ void checkDisplayTimer(){
 			}
 			else{
 				Serial.println("GPS fix Invalid");
-			}
-			
-			if(gpstimeokFlag){
-				Serial.println("GPS Time: " +GPShhmmssdss);
-			Serial.println("GPS day:"+GPSdd);
-			Serial.println("GPS month:"+GPSmm);
-			Serial.println("GPS year:"+GPSyy);
-			Serial.println("GPS zone hours:"+GPSzh);
-			Serial.println("GPS zone minutes"+GPSzm);
-		
-			}
-			else {
-					Serial.println("GPS Time invalid");
-			}
-			
+			}			
 		}
 	}
-
-	void drawToModule()	{
-	
-	drawTimeToModule();
-	
-}
 
 void checkButtons(){
   if (millis() >= waitcheckButtons) {
@@ -632,15 +647,25 @@ void checkButtons(){
   }
 }
 
-void drawTimeToModule(){
+void drawToModule(){
   if (!moduleOff){
     unsigned long elapSecond = round(millis() / 1000);
     unsigned long totalSecond = gapSecond + elapSecond;
     byte pos = 2; // totalSecond % 4;
     if (pos>2) pos=1;
-    dm.clearDisplay();
-	// Serial.println(getrtctime());
+	// get hrs and mins in usable format
+	dm.clearDisplay();
+	if(gpsfixvalid="A"){  // check for valid time from GPS
+			
+		// gpsfixtime.toCharArray(timearray,6);
+		dm.setDisplayToString(gpsfixtime,(dots * 80),pos);
+	}
+	else{
+		// get rtc time instead
 	dm.setDisplayToString(getrtctime(),(dots * 80),pos);
+		
+	}
+    // Serial.println(getrtctime());
   
    }
 }
@@ -648,7 +673,7 @@ void drawTimeToModule(){
 void buttonEvent(byte inp){
   dm.setLED( 1,inp);
   switch (inp) {
-  case 0:  // inc hours
+  case 0: { // inc hours
     if (tm.Hour != 23)
     {  
 		tm.Hour++ ;
@@ -667,7 +692,8 @@ void buttonEvent(byte inp){
 		Serial.println("Error Writing to RTC");		
     }
     break;
-  case 1:   // decrement hours
+  }
+  case 1:  { // decrement hours
   if (tm.Hour != 0)
     {  
 		tm.Hour-- ;
@@ -685,7 +711,8 @@ void buttonEvent(byte inp){
 	Serial.println("Error Writing to RTC");		
     }
     break;
-  case 2:  // increment minutes
+  }
+  case 2: { // increment minutes
     if (tm.Minute != 59)
     {  
 		tm.Minute++ ;
@@ -703,7 +730,8 @@ void buttonEvent(byte inp){
 		Serial.println("Error Writing to RTC");		
     }
 	break;
-  case 3:   // decrement Minutes
+  }
+  case 3:  { // decrement Minutes
     if (tm.Minute != 0)
     {  
 		tm.Minute-- ;
@@ -721,7 +749,8 @@ void buttonEvent(byte inp){
 		Serial.println("Error Writing to RTC");		
     }
 	break;
-  case 4: // reset seconds
+  }
+  case 4: { // reset seconds
     tm.Second=0;
 	if (RTC.write(tm)) {
 			Serial.println("seconds reset");
@@ -732,24 +761,34 @@ void buttonEvent(byte inp){
     }
 	
 	break;
-  case 5:
+  }
+  case 5:{  // led on/off
     moduleOff = !moduleOff;
     if (moduleOff) dm.clearDisplay();
     break;
+  }
   case 6:
   Serial.println("Button 6 Pressed !");
     break;
-  case 7:
+  case 7:{
 	// cycle thru the modes
 	Serial.println("Button 7 Pressed !");
 	Serial.print("Mode:");
 	Serial.println(currentmode);
 	currentmode++;
-	if(currentmode==NUMMODES)
+	// send clearscreen
+	for(int m=4;m<8;m++){
+		sendclear(m,0,0,0x20);
+	}
+	if(displaymode==0)
 	{
-		currentmode=0;
+		displaymode=1;
+	}
+	else{
+		displaymode=0;
 	}
     break;
+  }
   }
 }
 
@@ -791,7 +830,6 @@ void setupRTC() {// reset the RTC
 
 bool getTime(const char *str){
   int Hour, Min, Sec;
-
   if (sscanf(str, "%d:%d:%d", &Hour, &Min, &Sec) != 3) return false;
   tm.Hour = Hour;
   tm.Minute = Min;
@@ -818,7 +856,6 @@ bool getDate(const char *str) {
 void scani2c(){
 	int error;
   int address;
-
   Serial.println("Scanning I2C...");
 
   i2cdevicecount = 0;
@@ -879,7 +916,7 @@ void GetGPSData(){
 		if (gpsmsgindex>(GPSBUFFERLEN-1)){
 			// gps message buffer over-run (no CR seen)
 			Serial.print("GPS Message Buffer Overrun");
-			PrintGPSMessage();
+			if(DEBUGGPS)PrintGPSMessage();
 			gpsmsgindex=0;
 			exit;
 		}
@@ -896,6 +933,8 @@ void GetGPSData(){
 					Serial.print("GPS:");
 					Serial.println(gpsstring);
 				}
+				// pass GPS data if pass-thru enabled
+				if(GPSPASSTHRU)Serial.println(gpsstring);
 				GPSParser();
 				GPSProcess();
 			}
@@ -908,14 +947,12 @@ void GetGPSData(){
 
 void GPSParser(){
 	// parse GPS message into string array
-	
 	int i;
 	int pc; // parm count
 	int gpsmsglength;
 	int cp1; // comma pointer1
 	int cp2; // comma pointer2
 	int lastcomma=0;
-	
     char c1;
 	String s1=gpsstring;
 	int mlen=s1.length();
@@ -970,11 +1007,10 @@ void GPSParser(){
 void GPSProcess(){
 	// GSP messages
 	String gpscmd = gpsstring.substring(1,6);
-	if(debugging=='Y'){
-	Serial.println("Processing "+gpscmd);
-	}
+	if(DEBUGGPS)	Serial.println("Processing "+gpscmd);
+
 	if(gpscmd=="GPGLL"){ 
-		if(debugging=='Y'){
+		if(DEBUGGPS){
 		Serial.println("LL - Latitude:"+Arg[0]+" "+ Arg[1]+ "Longitude:"+Arg[2]+" "+Arg[3]);
 		}
 		/* 
@@ -1054,7 +1090,7 @@ Where:
 				 *47          the checksum data, always begins with *
 				*/
 		if(gpsstring[7]!=0x2c){  // no comma in position 7 so have fix details
-			if(debugging=='Y'){
+			if(DEBUGGPS){
 				// copy the fix time
 				Serial.print("GPS Fix Time:"+Arg[0]);
 				Serial.print(" Fix Status:" + gpsfixvalid);
@@ -1067,7 +1103,7 @@ Where:
 	}
 	
 	if(gpscmd=="GPZDA"){
-		Serial.print("ZDA Message:");	
+		if(DEBUGGPS)Serial.print("ZDA Message:");	
 		/*
 		ZDA - Data and Time
 
@@ -1099,12 +1135,11 @@ where:
 	}
 }	
 
-
 void PrintGPSMessage(){
 	// dump the current GPS buffer to the serial port 
 	int i;
 	for(i=0;i<gpsmsgindex;i++){
-	Serial.print(gpsmsg[i]);
-}
+		Serial.print(gpsmsg[i]);
+	}
 	Serial.println();
 }
