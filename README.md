@@ -11,8 +11,11 @@ Arduino MEGA reads GPS, sets RTC, sends via I2C to Colorduino
 // Added gps handler
 // Added I2C display module handler
 
+Currently working on nrf24 connection for remote sensors
+
 Need gmt
-    Boolean isbst(int day, int month, int dow)
+
+Boolean isbst(int day, int month, int dow)
     {
         if (month < 3 || month > 10)  return false; 
         if (month > 3 && month < 10)  return true; 
