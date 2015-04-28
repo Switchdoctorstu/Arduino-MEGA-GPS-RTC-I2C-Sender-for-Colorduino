@@ -51,6 +51,7 @@ OK: startup time from rtc
 #define DEBUGTIME false
 #define DEBUGGPS false
 #define DEBUGREPORT false
+#define DEBUGTEMPERATURE true
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -62,6 +63,10 @@ OK: startup time from rtc
 
 #define FIRSTMODULE 4  // i2c address of 1st module
 #define LASTMODULE 7	// i2c address of last module
+
+// some pins
+#define INBOXTEMPPIN A0
+
 
 // Include the right libraries
 #include <Wire.h>
@@ -75,6 +80,7 @@ OK: startup time from rtc
 #include <SPI.h>
 #include "nRF24L01.h"  // Radio Libraries
 #include "RF24.h" // Radio
+
 
 // TM1638(byte dataPin, byte clockPin, byte strobePin, boolean activateDisplay = true, byte intensity = 7);
 TM1638 dm (5, 6, 7);
@@ -128,6 +134,9 @@ int fontheight=7;
 int fontwidth=5;
 char timearray[6]; // string for current valid time
 
+int inboxtemperature=0;
+long temperaturechecktime=0;
+long temperaturecheckinterval=5000;
 
 // gps handling
 String gpsfixvalid="N";
@@ -251,7 +260,16 @@ const unsigned char font_5x7[][5] = {
 void handleInterrupt() {
 	interrupts++;
 }
-
+void checktemperature(){
+	if(timeNow>=temperaturechecktime){
+		temperaturechecktime+=temperaturecheckinterval;
+		inboxtemperature=analogRead(INBOXTEMPPIN);
+		if(DEBUGTEMPERATURE){
+			Serial.print("Temperature V:");
+			Serial.println(inboxtemperature,DEC);
+		}
+	}
+}
 void gettime(){
 	String rtctimestring="000000";
   if (RTC.read(tm)) {
@@ -340,7 +358,7 @@ void loop(){
 			GetGPSData();
 		}
 		checkRTCupdate(); // keep RTC in sync with GPS if available
-		
+		checktemperature();
 	}
 
 void clearMatrix(){
@@ -380,8 +398,8 @@ int x;
 	}
 	if(gpsfixvalid=="A"){
 		backgreen=0x04;
-		backred=0x00;
-		backblue=0x00;
+		backred=inboxtemperature&0x7a>>3;
+		backblue=inboxtemperature&0xff;
 	}
 // build the raster
 	for(m=0;m<4;m++){  // Module Loop
