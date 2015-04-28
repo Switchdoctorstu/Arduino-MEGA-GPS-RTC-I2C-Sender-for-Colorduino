@@ -20,13 +20,20 @@ Need GMT
         
 
 
-Boolean isbst(int day, int month, int dow)
-    {
+Boolean isbst(int day, int month, int dow){
+
+        
         if (month < 3 || month > 10)  return false; 
+
+        
         if (month > 3 && month < 10)  return true; 
+
+        
         int previousSunday = day - dow;
 
         if (month == 3) return previousSunday >= 25;
+
+        
         if (month == 10) return previousSunday < 25;
 
         return false; // this line never gonna happen
