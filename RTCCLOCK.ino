@@ -397,9 +397,9 @@ int x;
 		
 	}
 	if(gpsfixvalid=="A"){
-		backgreen=0x04;
-		backred=inboxtemperature&0x7a>>3;
-		backblue=inboxtemperature&0xff;
+		backgreen=inboxtemperature&0x3f;
+		backred=inboxtemperature&0x1f;
+		backblue=0x00;
 	}
 // build the raster
 	for(m=0;m<4;m++){  // Module Loop
