@@ -32,7 +32,8 @@ OK: stx,type,index,data*11,chk,cr
 OK: sending char packets
 XX: BST offset
 XX: RF handler
-XX: Temperature
+OK: Temperature from thermistor on AO
+XX: adding bmp180 module
 OK: startup time from rtc 
 
 */
@@ -50,8 +51,9 @@ OK: startup time from rtc
 #define DEBUGMATRIX false
 #define DEBUGGPS false
 #define DEBUGREPORT true
-#define DEBUGTEMPERATURE true
+#define DEBUGTEMPERATURE false
 #define DEBUGTIME true
+#define DEBUGBMP false
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -74,18 +76,24 @@ OK: startup time from rtc
 #include <DS1307RTC.h>  // RTC
 #include <TM1638.h>  // LED Display 
 #include <String.h>
-#include <Adafruit_BMP085.h>
+#include <SFE_BMP180.h>
 
 // RF includes
 #include <SPI.h>
 #include "nRF24L01.h"  // Radio Libraries
 #include "RF24.h" // Radio
 
+SFE_BMP180 pressure_sensor;
 
 // TM1638(byte dataPin, byte clockPin, byte strobePin, boolean activateDisplay = true, byte intensity = 7);
 TM1638 dm (5, 6, 7);
 tmElements_t tm;   	// storage for time components
 time_t time_now;    // storage for local clock
+
+double baselinepressure; // baseline pressure
+double BMPtemperature;  // Temperature of device
+
+int i2cdelay=20;//wait after each packet
 
 // Declare all the global vars
 unsigned long waitcheckTime=0; // timer for time checking
@@ -99,10 +107,11 @@ unsigned long interrupts=0;			// interrupt counter
 unsigned long lasttime=0;
 unsigned long thistime=0;	// Time handles
 unsigned long timeNow;
-unsigned long RTCNextUpdateTime=0;
-unsigned long RTCUpdateInterval=60000; // 60 seconds
+unsigned long NextTimeSyncTime=0;
+unsigned long NextTimeSyncInterval=60000; // 60 seconds
 unsigned long displayNextUpdateTime=0;
 unsigned long displayUpdateInterval=5000;
+String rtctimestring="000000";
 boolean dots=0;
 boolean moduleOff=0;
 // setup mode 
@@ -139,6 +148,9 @@ int inboxtemperature=0;
 long temperaturechecktime=0;
 long temperaturecheckinterval=5000;
 
+//BMP180 variables
+double Altitude,Pressure;
+
 // gps handling
 String gpsfixvalid="N";
 String gpsfixtime="000000";
@@ -156,7 +168,7 @@ String GPSzh="00";
 String GPSzm="00";
 
 int argcount=0;  // number of arguments
-
+int returncode=0; // generic return code
 
 // buffer to hold raster 4 modules *8*8
 unsigned char matrix[256][3];
@@ -273,23 +285,20 @@ void checktemperature(){
 }
 void gettime(){
 	timeNow=millis(); // timer for local loop triggers
-	
-	String rtctimestring="000000";
   if (RTC.read(tm)) {
 		rtcokFlag=true;
+		rtctimestring=getrtctime();
 	}	
-	else 
-	{
+	else	{
 		rtcokFlag=false;
     	if (RTC.chipPresent()) {
 		  Serial.println("The DS1307 RTC is stopped.  Attempting to initialise");
 		  setupRTC();
-		  
 		} else {
 		Serial.println("DS1307 read error!  Please check the circuitry.");
 		Serial.println();
 		}
-  }
+	}
   // get hrs and mins in usable format
 	if(gpsfixvalid="A"){  // check for valid time from GPS
 		gpsfixtime.toCharArray(timearray,6);
@@ -297,7 +306,6 @@ void gettime(){
 	}	
 	else{
 		// get rtc time instead
-		rtctimestring=getrtctime();
 		rtctimestring.toCharArray(timearray,6);
 			currentmode=RTCMODE;
 	}
@@ -333,18 +341,54 @@ void setup() {
 	time_now=now();
 	
 	// Start I2C
-	Wire.begin();
+	int rtn = I2C_ClearBus(); // clear the I2C bus first before calling Wire.begin()
+  if (rtn != 0) {
+    Serial.println(F("I2C bus error. Could not clear"));
+    if (rtn == 1) {
+      Serial.println(F("SCL clock line held low"));
+    } else if (rtn == 2) {
+      Serial.println(F("SCL clock line held low by slave clock stretch"));
+    } else if (rtn == 3) {
+      Serial.println(F("SDA data line held low"));
+    }
+  } else { // bus clear
+    // re-enable Wire
+    // now can start Wire Arduino master
+    Wire.begin();
+  }
+	
 	
 	// setup the frequency counter interrupt
 	// attachInterrupt(0, handleInterrupt, FALLING);
-	// reset interval timers
-	unsigned long t=millis();
 	
+	scani2c();
+	// setup the pressure_sensor
+	if (pressure_sensor.begin())
+    Serial.println("BMP180 init success");
+  else
+  {
+    // Oops, something went wrong, this is usually a connection problem,
+    // see the comments at the top of this sketch for the proper connections.
+
+    Serial.println("BMP180 init fail (disconnected?)\n\n");
+  }
+
+  // Get the baseline pressure:
+  
+  baselinepressure = getPressure();
+  if(DEBUGBMP){
+	Serial.print("baseline pressure: ");
+	Serial.print(baselinepressure);
+	Serial.println(" mb");
+  }  
+  
+  // reset interval timers
+	unsigned long t=millis();
 	waitcheckTime = t + intervalcheckTime;  
 	waitcheckButtons = t + intervalcheckButtons;
-	RTCNextUpdateTime=t + RTCUpdateInterval;
 	displayNextUpdateTime=t+displayUpdateInterval;
-	scani2c();
+	// trigger initial time sync
+  NextTimeSyncTime=t-NextTimeSyncInterval;
 }
 
 void loop(){
@@ -366,6 +410,64 @@ void loop(){
 		checktemperature();
 	}
 
+double getPressure()
+{
+  char status;
+  double T,P,p0,a;
+
+  // You must first get a temperature measurement to perform a pressure reading.
+  
+  // Start a temperature measurement:
+  // If request is successful, the number of ms to wait is returned.
+  // If request is unsuccessful, 0 is returned.
+
+  status = pressure_sensor.startTemperature();
+  if (status != 0)
+  {
+    // Wait for the measurement to complete:
+
+    delay(status);
+
+    // Retrieve the completed temperature measurement:
+    // Note that the measurement is stored in the variable T.
+    // Use '&T' to provide the address of T to the function.
+    // Function returns 1 if successful, 0 if failure.
+
+    status = pressure_sensor.getTemperature(BMPtemperature);
+    if (status != 0)
+    {
+      // Start a pressure measurement:
+      // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
+      // If request is successful, the number of ms to wait is returned.
+      // If request is unsuccessful, 0 is returned.
+
+      status = pressure_sensor.startPressure(3);
+      if (status != 0)
+      {
+        // Wait for the measurement to complete:
+        delay(status);
+
+        // Retrieve the completed pressure measurement:
+        // Note that the measurement is stored in the variable P.
+        // Use '&P' to provide the address of P.
+        // Note also that the function requires the previous temperature measurement (T).
+        // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
+        // Function returns 1 if successful, 0 if failure.
+
+        status = pressure_sensor.getPressure(P,BMPtemperature);
+        if (status != 0)
+        {
+          return(P);
+        }
+        else Serial.println("error retrieving pressure measurement\n");
+      }
+      else Serial.println("error starting pressure measurement\n");
+    }
+    else Serial.println("error retrieving temperature measurement\n");
+  }
+  else Serial.println("error starting temperature measurement\n");
+}
+	
 void clearMatrix(){
 	for(int p=0;p<256;p++){
 		for(int c=0;c<4;c++){
@@ -442,7 +544,6 @@ int x;
 
 void sendToMatrix(){  	// draw something out to LED grid displays
 	char c;
-	int returncode=0;
 	// get hrs and mins in usable format
 	if(gpsfixvalid=="A"){  // check for valid time from GPS
 		//reload tm and write it to the RTC
@@ -519,8 +620,11 @@ void sendToMatrix(){  	// draw something out to LED grid displays
 					Wire.write(0x00);
 					Wire.write(0x00); // should be checksum.. later
 					Wire.write(0x0d); // send the ETX
-					returncode=Wire.endTransmission();
+					returncode=Wire.endTransmission(true); // send stop message
 					if(DEBUGI2C){Serial.println(returncode,HEX);}
+					if(returncode!=0){ // if not successful clear the i2c bus
+						returncode=I2C_ClearBus();
+					}
 					delay(16);
 				}
 			}
@@ -539,9 +643,8 @@ void sendflip(int m){
 					for(int n=0;n<13;n++) Wire.write(0x00); // fill buffer
 					// Wire.beginTransmission(m);
 					Wire.write(0x0d);  // etx= CR
-					Wire.endTransmission();
-					delay(10);
-					
+					returncode=Wire.endTransmission(true);
+					delay(16);
 }
 	
 void sendclear(int m, int r,int g, int b){ // send clear screen to matrix
@@ -561,18 +664,19 @@ void sendclear(int m, int r,int g, int b){ // send clear screen to matrix
 					Wire.write(b);
 					for(int n=0;n<10;n++) Wire.write(0x00); // fill buffer
 					Wire.write(0x0d);  // etx= CR
-					Wire.endTransmission();
-					delay(10);
+					returncode=Wire.endTransmission(true);
+					delay(16);
 }	
 
 void checktimesync(){
-	if(timeNow>RTCNextUpdateTime){
-		RTCNextUpdateTime=timeNow+RTCUpdateInterval;
+	if(timeNow>=NextTimeSyncTime){
+		NextTimeSyncTime=timeNow+NextTimeSyncInterval;
+		if(DEBUGTIME)Serial.println("syncing time");
 		// Time precedence
 		// GPS if Valid
 		// RTC if valid
 		// system clock
-		if(gpsfixvalid="A"){ //reload tm and write it to the RTC
+		if(gpsfixvalid=="A"){ //reload tm and write it to the RTC
 			long int t=gpsfixtime.toInt();
 			Serial.println("GPS Fix Time" + gpsfixtime  + "  ToInt:" + String(t));
 			tm.Hour=t/10000;
@@ -612,13 +716,13 @@ void checkDisplayTimer(){
   }
   if(timeNow>=displayNextUpdateTime){
 	  displayNextUpdateTime=timeNow+displayUpdateInterval; // reset LED display timer
-	  buildmarqee();
+	  buildmarquee();
 	  buildMatrix(); // build the raster to display on the matrix
 	  sendToMatrix();
   }
 }
 
-void buildmarqee(){
+void buildmarquee(){
 	
 	marquee=String(hour(time_now))+":"+ String(minute(time_now)) +":"+ String(second(time_now));  // Print system time
 			if(isAM(time_now)) marquee=marquee+" AM ";
@@ -626,6 +730,7 @@ void buildmarqee(){
 			marquee=marquee+String(dayShortStr(weekday(time_now)))+" ";
 			marquee=marquee+String(day(time_now))+" "+String(monthShortStr(month(time_now)))+" "+String(year(time_now));
 }
+
 void checkReport() {
 		if( timeNow>= reportTime){ // if we're due
 			reportTime=timeNow+reportInterval; // reset interval
@@ -670,6 +775,9 @@ void checkReport() {
 			else{
 				Serial.println("GPS fix Invalid");
 			}			
+			Pressure=getPressure(); // get the current pressure
+			Altitude=pressure_sensor.altitude(Pressure,baselinepressure);
+			Serial.println("Altitude:"+String(Altitude)+" Temperature:"+String(BMPtemperature));
 		}
 	}
 
@@ -700,7 +808,7 @@ void drawToModule(){
     if (pos>2) pos=1;
 	// get hrs and mins in usable format
 	dm.clearDisplay();
-	if(gpsfixvalid="A"){  // check for valid time from GPS
+	if(gpsfixvalid=="Y"){  // check for valid time from GPS
 		// gpsfixtime.toCharArray(timearray,6);
 		dm.setDisplayToString(gpsfixtime,(dots * 80),pos);
 	}
@@ -1155,4 +1263,77 @@ void PrintGPSMessage(){
 		Serial.print(gpsmsg[i]);
 	}
 	Serial.println();
+}
+
+/**
+ * This routine turns off the I2C bus and clears it
+ * on return SCA and SCL pins are tri-state inputs.
+ * You need to call Wire.begin() after this to re-enable I2C
+ * This routine does NOT use the Wire library at all.
+ *
+ * returns 0 if bus cleared
+ *         1 if SCL held low.
+ *         2 if SDA held low by slave clock stretch for > 2sec
+ *         3 if SDA held low after 20 clocks.
+ */
+int I2C_ClearBus() {
+	if(DEBUGI2C)Serial.println("Clearing I2C");
+  TWCR &= ~(_BV(TWEN)); //Disable the Atmel 2-Wire interface so we can control the SDA and SCL pins directly
+
+  pinMode(SDA, INPUT_PULLUP); // Make SDA (data) and SCL (clock) pins Inputs with pullup.
+  pinMode(SCL, INPUT_PULLUP);
+
+  delay(500);  // Wait 2.5 secs. This is strictly only necessary on the first power
+  // up of the DS3231 module to allow it to initialize properly,
+  // but is also assists in reliable programming of FioV3 boards as it gives the
+  // IDE a chance to start uploaded the program
+  // before existing sketch confuses the IDE by sending Serial data.
+
+  boolean SCL_LOW = (digitalRead(SCL) == LOW); // Check is SCL is Low.
+  if (SCL_LOW) { //If it is held low Arduno cannot become the I2C master. 
+    return 1; //I2C bus error. Could not clear SCL clock line held low
+  }
+
+  boolean SDA_LOW = (digitalRead(SDA) == LOW);  // vi. Check SDA input.
+  int clockCount = 20; // > 2x9 clock
+
+  while (SDA_LOW && (clockCount > 0)) { //  vii. If SDA is Low,
+    clockCount--;
+  // Note: I2C bus is open collector so do NOT drive SCL or SDA high.
+    pinMode(SCL, INPUT); // release SCL pullup so that when made output it will be LOW
+    pinMode(SCL, OUTPUT); // then clock SCL Low
+    delayMicroseconds(10); //  for >5uS
+    pinMode(SCL, INPUT); // release SCL LOW
+    pinMode(SCL, INPUT_PULLUP); // turn on pullup resistors again
+    // do not force high as slave may be holding it low for clock stretching.
+    delayMicroseconds(10); //  for >5uS
+    // The >5uS is so that even the slowest I2C devices are handled.
+    SCL_LOW = (digitalRead(SCL) == LOW); // Check if SCL is Low.
+    int counter = 20;
+    while (SCL_LOW && (counter > 0)) {  //  loop waiting for SCL to become High only wait 2sec.
+      counter--;
+      delay(100);
+      SCL_LOW = (digitalRead(SCL) == LOW);
+    }
+    if (SCL_LOW) { // still low after 2 sec error
+      return 2; // I2C bus error. Could not clear. SCL clock line held low by slave clock stretch for >2sec
+    }
+    SDA_LOW = (digitalRead(SDA) == LOW); //   and check SDA input again and loop
+  }
+  if (SDA_LOW) { // still low
+    return 3; // I2C bus error. Could not clear. SDA data line held low
+  }
+
+  // else pull SDA line low for Start or Repeated Start
+  pinMode(SDA, INPUT); // remove pullup.
+  pinMode(SDA, OUTPUT);  // and then make it LOW i.e. send an I2C Start or Repeated start control.
+  // When there is only one I2C master a Start or Repeat Start has the same function as a Stop and clears the bus.
+  /// A Repeat Start is a Start occurring after a Start with no intervening Stop.
+  delayMicroseconds(10); // wait >5uS
+  pinMode(SDA, INPUT); // remove output low
+  pinMode(SDA, INPUT_PULLUP); // and make SDA high i.e. send I2C STOP control.
+  delayMicroseconds(10); // x. wait >5uS
+  pinMode(SDA, INPUT); // and reset pins as tri-state inputs which is the default state on reset
+  pinMode(SCL, INPUT);
+  return 0; // all ok
 }
