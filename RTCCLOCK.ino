@@ -47,7 +47,7 @@ OK: startup time from rtc
 #define GPSMODE 1
 #define NUMMODES 2
 #define DEBUGI2C true
-#define DEBUGMATRIX true
+#define DEBUGMATRIX false
 #define DEBUGGPS false
 #define DEBUGREPORT true
 #define DEBUGTEMPERATURE true
