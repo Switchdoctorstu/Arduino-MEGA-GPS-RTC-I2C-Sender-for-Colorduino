@@ -108,7 +108,7 @@ unsigned long lasttime=0;
 unsigned long thistime=0;	// Time handles
 unsigned long timeNow;
 unsigned long NextTimeSyncTime=0;
-unsigned long NextTimeSyncInterval=60000; // 60 seconds
+unsigned long NextTimeSyncInterval=10000; // 10 seconds
 unsigned long displayNextUpdateTime=0;
 unsigned long displayUpdateInterval=5000;
 String rtctimestring="000000";
@@ -274,7 +274,7 @@ void handleInterrupt() {
 	interrupts++;
 }
 void checktemperature(){
-	if(timeNow>=temperaturechecktime){
+	if(timeNow>temperaturechecktime){
 		temperaturechecktime+=temperaturecheckinterval;
 		inboxtemperature=analogRead(INBOXTEMPPIN);
 		if(DEBUGTEMPERATURE){
@@ -300,7 +300,7 @@ void gettime(){
 		}
 	}
   // get hrs and mins in usable format
-	if(gpsfixvalid="A"){  // check for valid time from GPS
+	if(gpsfixvalid=="A"){  // check for valid time from GPS
 		gpsfixtime.toCharArray(timearray,6);
 		currentmode=GPSMODE;
 	}	
@@ -313,7 +313,7 @@ void gettime(){
 }
 
 String twochars(int number){
-	if (number >= 0 && number < 10)	{
+	if (number > 0 && number < 10)	{
 		return "0"+String(number);
 	}
 	else	{
@@ -322,7 +322,7 @@ String twochars(int number){
 }
 
 void print2digits(int number) {
-  if (number >= 0 && number < 10) {
+  if (number > 0 && number < 10) {
     Serial.write('0');
   }
   Serial.print(number);
@@ -399,8 +399,7 @@ void loop(){
 		checkDisplayTimer();
 		checkButtons();
 		if(DEBUGREPORT)checkReport(); // see if we need to report
-		// checki2c(); // Check for i2c communications - magno / temp
-	  
+		
 		// check for GPS data
 		if(Serial3.available()>0)
 			{
@@ -410,8 +409,7 @@ void loop(){
 		checktemperature();
 	}
 
-double getPressure()
-{
+double getPressure() {
   char status;
   double T,P,p0,a;
 
@@ -578,7 +576,7 @@ void sendToMatrix(){  	// draw something out to LED grid displays
 			}
 			Wire.write(0x0d);
 			returncode=Wire.endTransmission();
-			delay(16);
+			delay(i2cdelay);
 			if(DEBUGI2C){
 				Serial.println("sent "+ String(c) + " To Address:" +String(a)+" Return:"+String(returncode));
 			}
@@ -623,9 +621,9 @@ void sendToMatrix(){  	// draw something out to LED grid displays
 					returncode=Wire.endTransmission(true); // send stop message
 					if(DEBUGI2C){Serial.println(returncode,HEX);}
 					if(returncode!=0){ // if not successful clear the i2c bus
-						returncode=I2C_ClearBus();
+						if(returncode!=2) returncode=I2C_ClearBus(); // 2 = not there
 					}
-					delay(16);
+					delay(i2cdelay);
 				}
 			}
 		}
@@ -644,7 +642,7 @@ void sendflip(int m){
 					// Wire.beginTransmission(m);
 					Wire.write(0x0d);  // etx= CR
 					returncode=Wire.endTransmission(true);
-					delay(16);
+					delay(i2cdelay);
 }
 	
 void sendclear(int m, int r,int g, int b){ // send clear screen to matrix
@@ -665,11 +663,11 @@ void sendclear(int m, int r,int g, int b){ // send clear screen to matrix
 					for(int n=0;n<10;n++) Wire.write(0x00); // fill buffer
 					Wire.write(0x0d);  // etx= CR
 					returncode=Wire.endTransmission(true);
-					delay(16);
+					delay(i2cdelay);
 }	
 
 void checktimesync(){
-	if(timeNow>=NextTimeSyncTime){
+	if(timeNow>NextTimeSyncTime){
 		NextTimeSyncTime=timeNow+NextTimeSyncInterval;
 		if(DEBUGTIME)Serial.println("syncing time");
 		// Time precedence
@@ -709,12 +707,12 @@ void checktimesync(){
 }
 	
 void checkDisplayTimer(){
-  if (timeNow >= waitcheckTime) {
+  if (timeNow > waitcheckTime) {
     dots = !dots;
     drawToModule();
     waitcheckTime = timeNow+ intervalcheckTime;
   }
-  if(timeNow>=displayNextUpdateTime){
+  if(timeNow>displayNextUpdateTime){
 	  displayNextUpdateTime=timeNow+displayUpdateInterval; // reset LED display timer
 	  buildmarquee();
 	  buildMatrix(); // build the raster to display on the matrix
@@ -732,7 +730,7 @@ void buildmarquee(){
 }
 
 void checkReport() {
-		if( timeNow>= reportTime){ // if we're due
+		if( timeNow> reportTime){ // if we're due
 			reportTime=timeNow+reportInterval; // reset interval
 			Serial.println("*******************************");
 			Serial.println(marquee);
@@ -745,7 +743,7 @@ void checkReport() {
  			Serial.println(String(dayStr(weekday(time_now)))+" "+String(day(time_now))+String(monthStr(month(time_now))));
 			Serial.println(String( monthShortStr(month(time_now)))+" "+String(dayShortStr(weekday(time_now))));
 			Serial.println("Time Status:"+String(timeStatus()));
-			if(rtcokFlag=true){
+			if(rtcokFlag==true){
 				Serial.print("RTC Ok, Time = ");
 				print2digits(tm.Hour);
 				Serial.write(':');
@@ -782,7 +780,7 @@ void checkReport() {
 	}
 
 void checkButtons(){
-  if (millis() >= waitcheckButtons) {
+  if (timeNow > waitcheckButtons) {
     // dm.setLEDs(0);
     byte buttons=dm.getButtons();
     if(buttons>0){
@@ -1077,7 +1075,7 @@ void GPSParser(){
     char c1;
 	String s1=gpsstring;
 	int mlen=s1.length();
-	if(debugging=='Y'){
+	if(DEBUGGPS){
 		Serial.print("Parsing:");
         Serial.print(gpsmsgindex,DEC);
 		Serial.print(" Characters: ");
@@ -1111,7 +1109,7 @@ void GPSParser(){
 				lastcomma=1;
 			}
 		}
-		if(debugging=='Y'){
+		if(DEBUGGPS){
 			Serial.print("Found ");
 			Serial.print(pc,DEC);
 			Serial.println(" parameters");
