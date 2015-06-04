@@ -1,17 +1,15 @@
 /*
-
+xmit - watch 13
 // Stuarts code to drive Colourduino and TM1638 from GPS and DS1307 RTC
-*	This code is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU Lesser General Public
- *	License as published by the Free Software Foundation; either
- *	version 2.1 of the License, or (at your option) any later version.
- *	
+*	This code is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public
+ *	License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.
  *	This library is distributed in the hope that it will be useful,
  *	but WITHOUT ANY WARRANTY; without even the implied warranty of
  *	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  *	Lesser General Public License for more details.
  
- 
+// RF module needs external 3.3v supply plus decoupling capacitor
+
 // Reads GPS on serial 3
 // if GPS invalid:Reads the RTC 
 // Displays time on TM1638
@@ -33,13 +31,14 @@ OK: sending char packets
 XX: BST offset
 XX: RF handler
 OK: Temperature from thermistor on AO
-XX: adding bmp180 module
+OK: adding bmp180 module
 OK: startup time from rtc 
-
+XX: Marquee - crashes arduino!!
+OK: Added debug modes to clear serial noise
+OK: Added gps handler
+OK: Added I2C display module handler
+XX: watchdog
 */
-// Added debug mode to clear serial noise
-// Added gps handler
-// Added I2C display module handler
 
 
 //****************************************************
@@ -47,13 +46,17 @@ OK: startup time from rtc
 #define RTCMODE 0
 #define GPSMODE 1
 #define NUMMODES 2
-#define DEBUGI2C true
+#define DEBUGI2C false
 #define DEBUGMATRIX false
 #define DEBUGGPS false
 #define DEBUGREPORT true
 #define DEBUGTEMPERATURE false
-#define DEBUGTIME true
+#define DEBUGTIME false
 #define DEBUGBMP false
+#define MATRIXENABLED true
+#define MARQUEEENABLED false
+#define RFENABLED true
+#define DEBUGRF true
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -65,6 +68,9 @@ OK: startup time from rtc
 
 #define FIRSTMODULE 4  // i2c address of 1st module
 #define LASTMODULE 7	// i2c address of last module
+
+#define RFCEPIN 49      // mega pins for RF module
+#define RFCSNPIN 53
 
 // some pins
 #define INBOXTEMPPIN A0
@@ -80,28 +86,41 @@ OK: startup time from rtc
 
 // RF includes
 #include <SPI.h>
+#include "printf.h"
 #include "nRF24L01.h"  // Radio Libraries
 #include "RF24.h" // Radio
+// watchdog
+#include <avr/wdt.h>
 
-SFE_BMP180 pressure_sensor;
+RF24 radio(RFCEPIN,RFCSNPIN); // define the RF transceiver
+// flip the send and receive definitions for remote nodes
+const uint64_t send_pipes[5] = { 0xF0F0F0F0D2LL, 0xF0F0F0F0C3LL, 0xF0F0F0F0B4LL, 0xF0F0F0F0A5LL, 0xF0F0F0F096LL };
+const uint64_t receive_pipes[5] = { 0x3A3A3A3AD2LL, 0x3A3A3A3AC3LL, 0x3A3A3A3AB4LL, 0x3A3A3A3AA5LL, 0x3A3A3A3A96LL };
+char RFpacketout[8]; // RF packet buffers
+char RFpacketin[8]; // RF packet buffers
+unsigned long RFinterval=10000; // 10 second RF poll
+unsigned long RFtimer; // Poll timer
 
 // TM1638(byte dataPin, byte clockPin, byte strobePin, boolean activateDisplay = true, byte intensity = 7);
 TM1638 dm (5, 6, 7);
 tmElements_t tm;   	// storage for time components
 time_t time_now;    // storage for local clock
 
+SFE_BMP180 pressure_sensor; // define the BMP180
+
 double baselinepressure; // baseline pressure
 double BMPtemperature;  // Temperature of device
 
-int i2cdelay=20;//wait after each packet
+int i2cdelay=10;//wait after each packet
 
 // Declare all the global vars
+int lastminute=0;
 unsigned long waitcheckTime=0; // timer for time checking
 unsigned long waitcheckButtons=0; // timer for buttons
 unsigned long intervalcheckTime=1000;
 unsigned long intervalcheckButtons=500;
 unsigned long reportTime=1000;
-unsigned long reportInterval=1000;
+unsigned long reportInterval=2000;
 unsigned long gapSecond=0;
 unsigned long interrupts=0;			// interrupt counter
 unsigned long lasttime=0;
@@ -110,7 +129,7 @@ unsigned long timeNow;
 unsigned long NextTimeSyncTime=0;
 unsigned long NextTimeSyncInterval=10000; // 10 seconds
 unsigned long displayNextUpdateTime=0;
-unsigned long displayUpdateInterval=5000;
+unsigned long displayUpdateInterval=10000; // 10 seconds
 String rtctimestring="000000";
 boolean dots=0;
 boolean moduleOff=0;
@@ -126,14 +145,14 @@ const char *monthName[12] = {
 };
 // global GPS vars
 
-int i2cdevicecount=0;  // count of attached I2C devices
-int i2caddresses[MAXI2CDEVICES];
-int index=0;
-char msgfrommount[MAXMOUNTMSGLEN];
-int msgfrommountindex=0;
+int 	i2cdevicecount=0;  // count of attached I2C devices
+int 	i2caddresses[MAXI2CDEVICES];
+int	 	index=0;
+char 	msgfrommount[MAXMOUNTMSGLEN];
+int 	msgfrommountindex=0;
 String gpsstring="                                                                               ";
 String frommountstring="";
-char gpsmsg[GPSBUFFERLEN];
+char 	gpsmsg[GPSBUFFERLEN];
 unsigned int gpsmsgindex=0;
 char msgtomount[MAXMOUNTMSGLEN];
 int msgtomountindex=0;
@@ -269,7 +288,7 @@ const unsigned char font_5x7[][5] = {
         { 0x00, 0x41, 0x36, 0x08, 0x00 },               /* } - 0x7d - 125 */
         { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
 };
-String marquee="Initialising";
+String marquee="Initialising                                  ";
 void handleInterrupt() {
 	interrupts++;
 }
@@ -283,6 +302,7 @@ void checktemperature(){
 		}
 	}
 }
+
 void gettime(){
 	timeNow=millis(); // timer for local loop triggers
   if (RTC.read(tm)) {
@@ -328,49 +348,73 @@ void print2digits(int number) {
   Serial.print(number);
 }
 
+ISR(WDT_vect) {// Watchdog timer interrupt.
+// Include your code here - be careful not to use functions they may cause the interrupt to hang and
+// prevent a reset.
+
+// flash pin 13 to signal error
+pinMode(13,OUTPUT);
+for(int n=0;n<1000;n++){
+digitalWrite(13,LOW);
+delay(100);
+digitalWrite(13,HIGH);
+delay(100);
+}
+
+
+}
+
 void setup() {
+	wdt_disable(); // disable the watchdog
 	Serial.begin(19200);
 	Serial3.begin(9600); // GPS on Mega
 	// while (!Serial) ; // wait for serial
-	delay(200);
+	
+	// temp RF debug
+	printf_begin();
+	radio.begin();
+	radio.openReadingPipe(1,receive_pipes[1]);
+	radio.startListening();
+	radio.printDetails();
+	
+	
+	
+	delay(2000);// let rtc settle
 	if(debugging=='Y'){
 		Serial.println("Stuart's LED RTC - GPS and DS1307RTC V0.1");
 		Serial.println("-----------------------------------------");
 	}
+	// Set the processor time
+	setTime(0,0,0,1,1,2015);
 	// get time
 	time_now=now();
 	
 	// Start I2C
 	int rtn = I2C_ClearBus(); // clear the I2C bus first before calling Wire.begin()
-  if (rtn != 0) {
-    Serial.println(F("I2C bus error. Could not clear"));
-    if (rtn == 1) {
-      Serial.println(F("SCL clock line held low"));
-    } else if (rtn == 2) {
-      Serial.println(F("SCL clock line held low by slave clock stretch"));
-    } else if (rtn == 3) {
-      Serial.println(F("SDA data line held low"));
-    }
-  } else { // bus clear
+	if (rtn != 0) {
+		Serial.println(F("I2C bus error. Could not clear"));
+		if (rtn == 1) {
+		  Serial.println(F("SCL clock line held low"));
+		} else if (rtn == 2) {
+		  Serial.println(F("SCL clock line held low by slave clock stretch"));
+		} else if (rtn == 3) {
+			Serial.println(F("SDA data line held low"));
+		}
+	} 
+	else { // bus clear
     // re-enable Wire
     // now can start Wire Arduino master
     Wire.begin();
-  }
-	
-	
-	// setup the frequency counter interrupt
-	// attachInterrupt(0, handleInterrupt, FALLING);
-	
+	}
+
 	scani2c();
 	// setup the pressure_sensor
 	if (pressure_sensor.begin())
-    Serial.println("BMP180 init success");
-  else
-  {
+		Serial.println("BMP180 init success");
+	else{
     // Oops, something went wrong, this is usually a connection problem,
     // see the comments at the top of this sketch for the proper connections.
-
-    Serial.println("BMP180 init fail (disconnected?)\n\n");
+		Serial.println("BMP180 init fail (disconnected?)\n\n");
   }
 
   // Get the baseline pressure:
@@ -387,12 +431,60 @@ void setup() {
 	waitcheckTime = t + intervalcheckTime;  
 	waitcheckButtons = t + intervalcheckButtons;
 	displayNextUpdateTime=t+displayUpdateInterval;
-	// trigger initial time sync
-  NextTimeSyncTime=t-NextTimeSyncInterval;
+	RFtimer=t+RFinterval;
+  NextTimeSyncTime=t; // trigger initial time sync
+	
+  if(RFENABLED)setupRF(); // start the radio 
+  watchdogSetup(); // start the watchdog 
+}
+
+void watchdogSetup(void) {
+cli(); // disable all interrupts
+wdt_reset(); // reset the WDT timer
+/*
+WDTCSR configuration:
+WDIE = 1: Interrupt Enable
+WDE = 1 :Reset Enable
+WDP3 = 0; // :For 2000ms Time-out
+WDP2 = 1; // :For 2000ms Time-out
+WDP1 = 1; // :For 2000ms Time-out
+WDP0 = 1; // :For 2000ms Time-out
+*/
+
+// Enter Watchdog Configuration mode:
+WDTCSR |= (1<<WDCE) | (0<<WDE);
+// Set Watchdog settings:
+WDTCSR =  (0<<WDP3) | (1<<WDP2) | (1<<WDP1) | (1<<WDP0);
+WDTCSR |=(1<<WDIE);
+wdt_enable(WDTO_8S); // enable watchdog
+sei(); // enable interrupts
+pinMode(13,OUTPUT);
+digitalWrite(13,LOW); // signal by pin 13 low
+}
+
+void setupRF(){
+	radio.begin();
+	radio.setRetries(10,3);
+	radio.setPayloadSize(8);
+	// we've got 5 pipes defined
+	// this is the hub so we need 5 x send and 5 x receive
+	
+	if(DEBUGRF)		Serial.println("Starting Radio");
+	radio.openWritingPipe(send_pipes[0]);
+	radio.openReadingPipe(1,receive_pipes[1]);
+    radio.openReadingPipe(2,receive_pipes[2]);
+    radio.openReadingPipe(3,receive_pipes[3]);
+    radio.openReadingPipe(4,receive_pipes[4]);
+   // radio.openReadingPipe(5,receive_pipes[4]);
+	radio.startListening();
+	if(DEBUGRF){	printf_begin();
+		radio.printDetails();
+	}
+	
 }
 
 void loop(){
-
+	uint8_t pipe_number;
 // main code here - runs repeatedly
 		
 		gettime();   // read the time from the RTC or GPS 
@@ -407,8 +499,58 @@ void loop(){
 		}
 		checktimesync(); // keep RTC in sync with GPS if available
 		checktemperature();
+		pollRF(); // poll the rf receivers
+		if(radio.available(&pipe_number)){
+			if(DEBUGRF)Serial.println("RF Data on pipe:"+String(pipe_number));
+			readRF();
+		}
+		wdt_reset(); // reset the watchdog
 	}
+	
+void readRF(){
+	if(radio.read( &RFpacketin, sizeof(RFpacketin) )){
+	if(DEBUGRF){
+		Serial.print("RF Packet Received");
+		for(int n=0;n<8;n++){
+			Serial.print(":");
+			Serial.print(RFpacketin[n],HEX);
+		}
+		Serial.println();
+	}	
+	}  else{
+		if(DEBUGRF)Serial.println("RF read failed");
+	}// get the packet
+}
 
+void pollRF(){
+	if(timeNow>RFtimer){
+		RFtimer=timeNow+RFinterval; // reset the timer`
+		// Build poll packet
+		RFpacketout[0]=0x23;
+		RFpacketout[7]=0x0d;
+		radio.stopListening();
+		
+		for(int n=1;n<5;n++){  // cycle thu remote units 1-4
+			RFpacketout[2]=n;
+			radio.openWritingPipe(send_pipes[n]);
+			radio.openReadingPipe(n,receive_pipes[n]);
+			// poll the remote
+			if(radio.write(&RFpacketout,sizeof(RFpacketout))){
+				if(DEBUGRF) Serial.println("RF Poll sent to node "+String(n));
+			}
+			else{
+				if(DEBUGRF) Serial.println("RF Poll send failed to node"+String(n));
+			}
+			delay(10);
+		}
+		radio.openReadingPipe(1,receive_pipes[1]);
+    radio.openReadingPipe(2,receive_pipes[2]);
+    radio.openReadingPipe(3,receive_pipes[3]);
+    radio.openReadingPipe(4,receive_pipes[4]);
+radio.startListening();
+	}
+}	
+	
 double getPressure() {
   char status;
   double T,P,p0,a;
@@ -480,31 +622,33 @@ void buildMatrix(){
 	// matrix =ColourRGB[256]
 	clearMatrix();  // clear the dot matrix buffer
 	
-	
 	//int character = (millis()/displayUpdateInterval % 64); // rotate character
 // start by just copying time chars to buffer
 int intensity = 128;
 char backred=0x00;
 char backgreen=0x04;
 char backblue=0x04;
-char red=0xa0;
-char green = 0x00;
+char red=0xFF;
+char green = 0xFF;
 char blue=0xFF;
 char fontbyte;
 char mybyte;
 unsigned int z,m,l,w,y;
 int x;
+
+	// set the colours up based on temperature
+		backgreen=BMPtemperature;
+		backgreen=backgreen & 0x0e;
+		backred=64-BMPtemperature; 
+		backred=backred &0x1f;
+		backblue=BMPtemperature;
+		backblue=backblue &0x0c;
 	// time should be in timearray
 	if(gpsfixvalid=="V"){
-		backgreen=0x00;
-	backblue=0x00;
-		backred=0x04;
-		
+		backgreen=0xFF;
 	}
 	if(gpsfixvalid=="A"){
-		backgreen=inboxtemperature&0x3f;
-		backred=inboxtemperature&0x1f;
-		backblue=0x00;
+		backblue=0xFF;
 	}
 // build the raster
 	for(m=0;m<4;m++){  // Module Loop
@@ -531,8 +675,7 @@ int x;
 					if(DEBUGMATRIX)Serial.print("0");
 					matrix[z][0]=backred;
 					matrix[z][1]=backgreen;
-					matrix[z][2]=backblue;
-				
+					matrix[z][2]=backblue;		
 				}	
 			}
 			if(DEBUGMATRIX)Serial.println();
@@ -669,7 +812,7 @@ void sendclear(int m, int r,int g, int b){ // send clear screen to matrix
 void checktimesync(){
 	if(timeNow>NextTimeSyncTime){
 		NextTimeSyncTime=timeNow+NextTimeSyncInterval;
-		if(DEBUGTIME)Serial.println("syncing time");
+		if(DEBUGTIME)Serial.println("syncing time <*****************************************");
 		// Time precedence
 		// GPS if Valid
 		// RTC if valid
@@ -702,7 +845,14 @@ void checktimesync(){
 			//
 		}
 		// set system time to RTC
-		setTime(tm.Hour,tm.Minute,tm.Second,tm.Day,tm.Month,tm.Year-30);
+		// need to validate data before setting
+		if(tm.Hour>-1&&tm.Hour<24&&tm.Minute>-1&&tm.Minute<60){
+			setTime(tm.Hour,tm.Minute,tm.Second,tm.Day,tm.Month,tm.Year-30);
+			if(DEBUGTIME)Serial.println("system clock set to tm");
+		}
+		else{
+			if(DEBUGTIME)Serial.println("time in tm not valid for sync");
+		}
 	}
 }
 	
@@ -712,11 +862,17 @@ void checkDisplayTimer(){
     drawToModule();
     waitcheckTime = timeNow+ intervalcheckTime;
   }
+  if(tm.Minute!=lastminute){
+	  lastminute=tm.Minute;
+	  buildMatrix(); // build the raster to display on the matrix
+	  if(MATRIXENABLED)sendToMatrix();
+	  displayNextUpdateTime=timeNow+displayUpdateInterval; // reset LED display timer
+  }
   if(timeNow>displayNextUpdateTime){
 	  displayNextUpdateTime=timeNow+displayUpdateInterval; // reset LED display timer
-	  buildmarquee();
+	  if(MARQUEEENABLED)buildmarquee();
 	  buildMatrix(); // build the raster to display on the matrix
-	  sendToMatrix();
+	  if(MATRIXENABLED)sendToMatrix();
   }
 }
 
@@ -725,23 +881,23 @@ void buildmarquee(){
 	marquee=String(hour(time_now))+":"+ String(minute(time_now)) +":"+ String(second(time_now));  // Print system time
 			if(isAM(time_now)) marquee=marquee+" AM ";
 			if(isPM(time_now)) marquee=marquee+" PM ";
-			marquee=marquee+String(dayShortStr(weekday(time_now)))+" ";
-			marquee=marquee+String(day(time_now))+" "+String(monthShortStr(month(time_now)))+" "+String(year(time_now));
+			// marquee=marquee+String(dayShortStr(weekday(time_now)))+" ";
+			// marquee=marquee+String(day(time_now))+" "+String(monthShortStr(month(time_now)))+" "+String(year(time_now));
 }
 
 void checkReport() {
 		if( timeNow> reportTime){ // if we're due
 			reportTime=timeNow+reportInterval; // reset interval
 			Serial.println("*******************************");
-			Serial.println(marquee);
-			Serial.println("Onboard Clock:"+String(hour(time_now))+":"+ String(minute(time_now))) +":"+ String(second(time_now));  // Print system time
+			if(MARQUEEENABLED)Serial.println(marquee);
+			Serial.print("Onboard Clock:"+String(hour(time_now))+":"+ String(minute(time_now))) +":"+ String(second(time_now));  // Print system time
 			if(isAM(time_now)) Serial.println("AM");
 			if(isPM(time_now)) Serial.println("PM");
 			// now() time in seconds since 1/1/70
 			Serial.println(String(day(time_now))+":"+String(month(time_now))+":"+String(year(time_now)));             // The day now (1-31)
 			Serial.println("DOTW:"+String(weekday(time_now)));         // Day of the week, Sunday is day 1
- 			Serial.println(String(dayStr(weekday(time_now)))+" "+String(day(time_now))+String(monthStr(month(time_now))));
-			Serial.println(String( monthShortStr(month(time_now)))+" "+String(dayShortStr(weekday(time_now))));
+ 			//Serial.println(String(dayStr(weekday(time_now)))+" "+String(day(time_now))+String(monthStr(month(time_now))));
+			//Serial.println(String( monthShortStr(month(time_now)))+" "+String(dayShortStr(weekday(time_now))));
 			Serial.println("Time Status:"+String(timeStatus()));
 			if(rtcokFlag==true){
 				Serial.print("RTC Ok, Time = ");
@@ -776,6 +932,7 @@ void checkReport() {
 			Pressure=getPressure(); // get the current pressure
 			Altitude=pressure_sensor.altitude(Pressure,baselinepressure);
 			Serial.println("Altitude:"+String(Altitude)+" Temperature:"+String(BMPtemperature));
+			Serial.println("Sync:"+String(NextTimeSyncTime-timeNow));
 		}
 	}
 
@@ -800,13 +957,13 @@ void checkButtons(){
 
 void drawToModule(){
   if (!moduleOff){
-    unsigned long elapSecond = round(millis() / 1000);
-    unsigned long totalSecond = gapSecond + elapSecond;
+    // unsigned long elapSecond = round(millis() / 1000);
+    // unsigned long totalSecond = gapSecond + elapSecond;
     byte pos = 2; // totalSecond % 4;
-    if (pos>2) pos=1;
+    // if (pos>2) pos=1;
 	// get hrs and mins in usable format
 	dm.clearDisplay();
-	if(gpsfixvalid=="Y"){  // check for valid time from GPS
+	if(gpsfixvalid=="A"){  // check for valid time from GPS
 		// gpsfixtime.toCharArray(timearray,6);
 		dm.setDisplayToString(gpsfixtime,(dots * 80),pos);
 	}
@@ -1263,7 +1420,9 @@ void PrintGPSMessage(){
 	Serial.println();
 }
 
-/**
+
+int I2C_ClearBus() {
+	/**
  * This routine turns off the I2C bus and clears it
  * on return SCA and SCL pins are tri-state inputs.
  * You need to call Wire.begin() after this to re-enable I2C
@@ -1274,7 +1433,6 @@ void PrintGPSMessage(){
  *         2 if SDA held low by slave clock stretch for > 2sec
  *         3 if SDA held low after 20 clocks.
  */
-int I2C_ClearBus() {
 	if(DEBUGI2C)Serial.println("Clearing I2C");
   TWCR &= ~(_BV(TWEN)); //Disable the Atmel 2-Wire interface so we can control the SDA and SCL pins directly
 
