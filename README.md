@@ -16,6 +16,7 @@ Arduino MEGA reads GPS, sets RTC, sends via I2C to Colorduino
     Added gps handler
 
     Added I2C display module handler
+    Added local BMP180 module
 
     Added watchdog
 
