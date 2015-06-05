@@ -1,7 +1,6 @@
 # Arduino-MEGA-GPS-RTC-I2C-Sender-for-Colorduino
 Arduino MEGA reads GPS, sets RTC, sends via I2C to Colorduino
-
-// Stuarts code to drive u lox GPS DS1307 RTC and TM1638 Display
+ Stuarts code to drive u lox GPS DS1307 RTC and TM1638 Display
 
     Reads the RTC 
 
@@ -18,6 +17,7 @@ Currently working on nrf24 connection for remote sensors
  RF24 setup ok
 
 Need GMT
+
       Boolean isbst(int day, int month, int dow){
         if (month < 3 || month > 10)  return false; 
         if (month > 3 && month < 10)  return true; 
