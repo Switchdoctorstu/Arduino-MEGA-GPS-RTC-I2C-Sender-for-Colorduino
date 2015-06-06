@@ -1,5 +1,5 @@
 /*
-xmit - watch 13
+xmit - 4S watch 13
 // Stuarts code to drive Colourduino and TM1638 from GPS and DS1307 RTC
 *	This code is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public
  *	License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.
@@ -46,6 +46,7 @@ XX: watchdog
 #define RTCMODE 0
 #define GPSMODE 1
 #define NUMMODES 2
+#define DEBUGWATCHDOG true
 #define DEBUGI2C false
 #define DEBUGMATRIX false
 #define DEBUGGPS false
@@ -56,7 +57,7 @@ XX: watchdog
 #define MATRIXENABLED true
 #define MARQUEEENABLED false
 #define RFENABLED true
-#define DEBUGRF true
+#define DEBUGRF false
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -64,7 +65,7 @@ XX: watchdog
 #define MAGNOADDRESS 0x1e
 #define MAXERRORCOUNT 5
 #define MAXMOUNTMSGLEN 128
-#define GPSPASSTHRU false  // enable pass-thru of GPS data so PC sees GPS
+#define GPSPASSTHRU true  // enable pass-thru of GPS data so PC sees GPS
 
 #define FIRSTMODULE 4  // i2c address of 1st module
 #define LASTMODULE 7	// i2c address of last module
@@ -351,17 +352,17 @@ void print2digits(int number) {
 ISR(WDT_vect) {// Watchdog timer interrupt.
 // Include your code here - be careful not to use functions they may cause the interrupt to hang and
 // prevent a reset.
+wdt_disable();
+if(DEBUGWATCHDOG)Serial.println("Watchdog!!");
 
 // flash pin 13 to signal error
 pinMode(13,OUTPUT);
 for(int n=0;n<1000;n++){
 digitalWrite(13,LOW);
-delay(100);
+delay(20);
 digitalWrite(13,HIGH);
-delay(100);
+delay(20);
 }
-
-
 }
 
 void setup() {
@@ -369,17 +370,18 @@ void setup() {
 	Serial.begin(19200);
 	Serial3.begin(9600); // GPS on Mega
 	// while (!Serial) ; // wait for serial
-	
+	watchdogSetup(); // start the watchdog
 	// temp RF debug
+	if(DEBUGRF){
 	printf_begin();
 	radio.begin();
 	radio.openReadingPipe(1,receive_pipes[1]);
 	radio.startListening();
 	radio.printDetails();
+	}
 	
 	
-	
-	delay(2000);// let rtc settle
+	delay(1000);// let rtc settle
 	if(debugging=='Y'){
 		Serial.println("Stuart's LED RTC - GPS and DS1307RTC V0.1");
 		Serial.println("-----------------------------------------");
@@ -435,11 +437,12 @@ void setup() {
   NextTimeSyncTime=t; // trigger initial time sync
 	
   if(RFENABLED)setupRF(); // start the radio 
-  watchdogSetup(); // start the watchdog 
+   
 }
 
 void watchdogSetup(void) {
-cli(); // disable all interrupts
+	if(DEBUGWATCHDOG)Serial.println("Setting Up Watchdog");
+// cli(); // disable all interrupts
 wdt_reset(); // reset the WDT timer
 /*
 WDTCSR configuration:
@@ -452,14 +455,16 @@ WDP0 = 1; // :For 2000ms Time-out
 */
 
 // Enter Watchdog Configuration mode:
-WDTCSR |= (1<<WDCE) | (0<<WDE);
+WDTCSR |= (1<<WDCE) | (1<<WDE);
 // Set Watchdog settings:
-WDTCSR =  (0<<WDP3) | (1<<WDP2) | (1<<WDP1) | (1<<WDP0);
-WDTCSR |=(1<<WDIE);
-wdt_enable(WDTO_8S); // enable watchdog
-sei(); // enable interrupts
+WDTCSR =  (1<<WDP3) | (0<<WDP2) | (0<<WDP1) | (0<<WDP0)  | (1<<WDIE);
+wdt_reset(); // reset the WDT timer
+//wdt_enable(); // enable watchdog
+// sei(); // enable interrupts
 pinMode(13,OUTPUT);
 digitalWrite(13,LOW); // signal by pin 13 low
+if(DEBUGWATCHDOG)Serial.println("Watchdog set");
+
 }
 
 void setupRF(){
@@ -486,7 +491,8 @@ void setupRF(){
 void loop(){
 	uint8_t pipe_number;
 // main code here - runs repeatedly
-		
+		wdt_reset(); // reset the watchdog
+		digitalWrite(13,LOW); // signal by pin 13 low
 		gettime();   // read the time from the RTC or GPS 
 		checkDisplayTimer();
 		checkButtons();
@@ -504,7 +510,7 @@ void loop(){
 			if(DEBUGRF)Serial.println("RF Data on pipe:"+String(pipe_number));
 			readRF();
 		}
-		wdt_reset(); // reset the watchdog
+		
 	}
 	
 void readRF(){
@@ -681,6 +687,43 @@ int x;
 			if(DEBUGMATRIX)Serial.println();
 		}
 	}
+	// Draw temperature graph
+	drawgraphs(); 
+}
+
+void drawgraphs(){
+	int graphwidth=6;
+	int graphheight=8;
+	int graphstartx=26;
+	int z,y,i,t,c,d,p;
+	char backred = 0x00;
+	char backblue =0x00;
+	char backgreen =0x00;
+	char red=0xff;
+	char green =0xff;
+	char blue =0xff;
+	t=BMPtemperature;
+	i=0;
+	d=graphheight*graphwidth;
+	c=d*t/60;
+	if(c>d)c=d;
+	for(z=0;z<graphheight;z++){
+		for(y=0;y<graphwidth;y++){
+			p=(z*32)+graphstartx+y;
+			if(i<c){ // foreground
+			matrix[p][0]=red;
+			matrix[p][1]=green;
+			matrix[p][2]=blue;
+			}
+			else{  // background
+				matrix[p][0]=backred;
+				matrix[p][1]=backgreen;
+				matrix[p][2]=backblue;
+			
+			}
+			i++;
+		}
+	}
 }
 
 void sendToMatrix(){  	// draw something out to LED grid displays
@@ -817,7 +860,7 @@ void checktimesync(){
 		// GPS if Valid
 		// RTC if valid
 		// system clock
-		if(gpsfixvalid=="A"){ //reload tm and write it to the RTC
+		if((gpsfixvalid=="A")){ //reload tm and write it to the RTC
 			long int t=gpsfixtime.toInt();
 			Serial.println("GPS Fix Time" + gpsfixtime  + "  ToInt:" + String(t));
 			tm.Hour=t/10000;
@@ -899,6 +942,7 @@ void checkReport() {
  			//Serial.println(String(dayStr(weekday(time_now)))+" "+String(day(time_now))+String(monthStr(month(time_now))));
 			//Serial.println(String( monthShortStr(month(time_now)))+" "+String(dayShortStr(weekday(time_now))));
 			Serial.println("Time Status:"+String(timeStatus()));
+			Serial.println("Time Now:"+String(time_now));
 			if(rtcokFlag==true){
 				Serial.print("RTC Ok, Time = ");
 				print2digits(tm.Hour);
@@ -920,7 +964,7 @@ void checkReport() {
 			}
 		
 			Serial.println("GPS fix status:" + gpsfixvalid);
-			if(gpsfixvalid=="A"){
+			if((gpsfixvalid=="A")||(gpsfixvalid="V")){
 				Serial.println("GPS fix time:" + gpsfixtime + " Date:"+gpsfixdate);
 				Serial.print("GPS latitude:" + gpslat + " " + gpslatort);
 				Serial.println(" longitude:" + gpslong + " " + gpslongort);  // gps longitude compass
@@ -1301,6 +1345,11 @@ void GPSProcess(){
 			 *iD          checksum data
 		*/
 		// PrintGPSMessage();		
+		gpslat=Arg[0];
+		gpslatort=Arg[1];
+		gpslong=Arg[2];
+		gpslongort=Arg[3];
+		gpsfixtime=Arg[4];
 		exit;
 	}
 	if(gpscmd=="GPRMC"){
