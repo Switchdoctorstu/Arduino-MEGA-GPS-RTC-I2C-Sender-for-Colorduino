@@ -1,5 +1,5 @@
 /*
-xmit - 4S watch 13
+xmit - 4S watch 13 jmp to 0x000
 // Stuarts code to drive Colourduino and TM1638 from GPS and DS1307 RTC
 *	This code is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public
  *	License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.
@@ -37,7 +37,8 @@ XX: Marquee - crashes arduino!!
 OK: Added debug modes to clear serial noise
 OK: Added gps handler
 OK: Added I2C display module handler
-XX: watchdog
+OK: watchdog - timer working
+XX: self reset
 */
 
 
@@ -51,7 +52,7 @@ XX: watchdog
 #define DEBUGMATRIX false
 #define DEBUGGPS false
 #define DEBUGREPORT true
-#define DEBUGTEMPERATURE false
+#define DEBUGINBOX false
 #define DEBUGTIME false
 #define DEBUGBMP false
 #define MATRIXENABLED true
@@ -74,7 +75,7 @@ XX: watchdog
 #define RFCSNPIN 53
 
 // some pins
-#define INBOXTEMPPIN A0
+#define INBOXPIN A0
 
 
 // Include the right libraries
@@ -93,6 +94,10 @@ XX: watchdog
 // watchdog
 #include <avr/wdt.h>
 
+
+// ************************************
+// Define Objects and variables
+// ************************************
 RF24 radio(RFCEPIN,RFCSNPIN); // define the RF transceiver
 // flip the send and receive definitions for remote nodes
 const uint64_t send_pipes[5] = { 0xF0F0F0F0D2LL, 0xF0F0F0F0C3LL, 0xF0F0F0F0B4LL, 0xF0F0F0F0A5LL, 0xF0F0F0F096LL };
@@ -108,7 +113,7 @@ tmElements_t tm;   	// storage for time components
 time_t time_now;    // storage for local clock
 
 SFE_BMP180 pressure_sensor; // define the BMP180
-
+double Altitude,Pressure;//BMP180 variables
 double baselinepressure; // baseline pressure
 double BMPtemperature;  // Temperature of device
 
@@ -123,29 +128,28 @@ unsigned long intervalcheckButtons=500;
 unsigned long reportTime=1000;
 unsigned long reportInterval=2000;
 unsigned long gapSecond=0;
-unsigned long interrupts=0;			// interrupt counter
 unsigned long lasttime=0;
 unsigned long thistime=0;	// Time handles
-unsigned long timeNow;
+unsigned long timeNow=0;
 unsigned long NextTimeSyncTime=0;
 unsigned long NextTimeSyncInterval=10000; // 10 seconds
 unsigned long displayNextUpdateTime=0;
 unsigned long displayUpdateInterval=10000; // 10 seconds
-String rtctimestring="000000";
+String 	rtctimestring="000000";
 boolean dots=0;
 boolean moduleOff=0;
 // setup mode 
-int currentmode=RTCMODE;
-int displaymode=1; // major display mode 0=char 1=raster
+int 	currentmode=RTCMODE;
+int 	displaymode=1; // major display mode 0=char 1=raster
 boolean rtcokFlag=false;
 boolean gpstimeokFlag=false;
-// array of month names
-const char *monthName[12] = {
+
+const char *monthName[12] = {// array of month names
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
-// global GPS vars
 
+// global GPS vars
 int 	i2cdevicecount=0;  // count of attached I2C devices
 int 	i2caddresses[MAXI2CDEVICES];
 int	 	index=0;
@@ -155,21 +159,17 @@ String gpsstring="                                                              
 String frommountstring="";
 char 	gpsmsg[GPSBUFFERLEN];
 unsigned int gpsmsgindex=0;
-char msgtomount[MAXMOUNTMSGLEN];
-int msgtomountindex=0;
-char debugging='N';
-int trigger=0;
-int i2cmagno=0;
-int fontheight=7;
-int fontwidth=5;
-char timearray[6]; // string for current valid time
+char 	msgtomount[MAXMOUNTMSGLEN];
+int 	msgtomountindex=0;
+int 	trigger=0;
+int 	i2cmagno=0;
+int 	fontheight=7;
+int 	fontwidth=5;
+char 	timearray[6]; // string for current valid time
 
-int inboxtemperature=0;
-long temperaturechecktime=0;
-long temperaturecheckinterval=5000;
-
-//BMP180 variables
-double Altitude,Pressure;
+int inboxsensor=0;
+long inboxchecktime=0;
+long inboxcheckinterval=5000;
 
 // gps handling
 String gpsfixvalid="N";
@@ -192,7 +192,8 @@ int returncode=0; // generic return code
 
 // buffer to hold raster 4 modules *8*8
 unsigned char matrix[256][3];
-const unsigned char font_5x7[][5] = { 
+
+const unsigned char font_5x7[][5] = { // Font Table
         { 0x00, 0x00, 0x00, 0x00, 0x00 },               /*   - 0x20 - 32 */
         { 0x00, 0x00, 0x5f, 0x00, 0x00 },               /* ! - 0x21 - 33 */ 
         { 0x00, 0x07, 0x00, 0x07, 0x00 },               /* " - 0x22 - 34 */ 
@@ -289,17 +290,16 @@ const unsigned char font_5x7[][5] = {
         { 0x00, 0x41, 0x36, 0x08, 0x00 },               /* } - 0x7d - 125 */
         { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
 };
+
 String marquee="Initialising                                  ";
-void handleInterrupt() {
-	interrupts++;
-}
-void checktemperature(){
-	if(timeNow>temperaturechecktime){
-		temperaturechecktime+=temperaturecheckinterval;
-		inboxtemperature=analogRead(INBOXTEMPPIN);
-		if(DEBUGTEMPERATURE){
-			Serial.print("Temperature V:");
-			Serial.println(inboxtemperature,DEC);
+
+void checkinboxsensor(){
+	if(timeNow>inboxchecktime){
+		inboxchecktime+=inboxcheckinterval;
+		inboxsensor=analogRead(INBOXPIN);
+		if(DEBUGINBOX){
+			Serial.print("In Box Sensor V:");
+			Serial.println(inboxsensor,DEC);
 		}
 	}
 }
@@ -334,11 +334,16 @@ void gettime(){
 }
 
 String twochars(int number){
-	if (number > 0 && number < 10)	{
-		return "0"+String(number);
+	if(number==0) {
+		return"00";
 	}
-	else	{
-	return String(number);
+	else {
+		if (number > 0 && number < 10)	{
+			return "0"+String(number);
+		}
+		else	{
+			return String(number);
+		}
 	}
 }
 
@@ -350,19 +355,20 @@ void print2digits(int number) {
 }
 
 ISR(WDT_vect) {// Watchdog timer interrupt.
-// Include your code here - be careful not to use functions they may cause the interrupt to hang and
-// prevent a reset.
-wdt_disable();
-if(DEBUGWATCHDOG)Serial.println("Watchdog!!");
+	//  careful not to use functions they may cause the interrupt to hang and
+	// prevent a reset.
+	wdt_disable();
+	if(DEBUGWATCHDOG)Serial.println("Watchdog!!");
 
-// flash pin 13 to signal error
-pinMode(13,OUTPUT);
-for(int n=0;n<1000;n++){
-digitalWrite(13,LOW);
-delay(20);
-digitalWrite(13,HIGH);
-delay(20);
-}
+	// flash pin 13 to signal error
+	pinMode(13,OUTPUT);
+	for(int n=0;n<1000;n++){
+		digitalWrite(13,LOW);
+		delay(20);
+		digitalWrite(13,HIGH);
+		delay(20);
+	}
+	asm volatile ("  jmp 0"); // Bootstrap back to zero
 }
 
 void setup() {
@@ -382,10 +388,10 @@ void setup() {
 	
 	
 	delay(1000);// let rtc settle
-	if(debugging=='Y'){
+	
 		Serial.println("Stuart's LED RTC - GPS and DS1307RTC V0.1");
 		Serial.println("-----------------------------------------");
-	}
+	
 	// Set the processor time
 	setTime(0,0,0,1,1,2015);
 	// get time
@@ -504,7 +510,7 @@ void loop(){
 			GetGPSData();
 		}
 		checktimesync(); // keep RTC in sync with GPS if available
-		checktemperature();
+		checkinboxsensor();
 		pollRF(); // poll the rf receivers
 		if(radio.available(&pipe_number)){
 			if(DEBUGRF)Serial.println("RF Data on pipe:"+String(pipe_number));
@@ -641,6 +647,7 @@ char fontbyte;
 char mybyte;
 unsigned int z,m,l,w,y;
 int x;
+int offset=8; // shift clock x
 
 	// set the colours up based on temperature
 		backgreen=BMPtemperature;
@@ -651,10 +658,10 @@ int x;
 		backblue=backblue &0x0c;
 	// time should be in timearray
 	if(gpsfixvalid=="V"){
-		backgreen=0xFF;
+		backblue=0x0F;
 	}
 	if(gpsfixvalid=="A"){
-		backblue=0xFF;
+		backgreen=0x0F;
 	}
 // build the raster
 	for(m=0;m<4;m++){  // Module Loop
@@ -670,7 +677,7 @@ int x;
 				Serial.print(m,DEC);
 			}
 			for(y=0;y<8;y++){ // cycle thru bits
-			z=(m*6)+(y*32)+x;
+			z=(m*6)+(y*32)+x+offset;
 				if(fontbyte&128>>y){ // bit is set
 					if(DEBUGMATRIX)Serial.print("1");
 					matrix[z][0]=red;
@@ -689,21 +696,43 @@ int x;
 	}
 	// Draw temperature graph
 	drawgraphs(); 
+	drawseconds();
+}
+
+void drawseconds(){
+	int s=tm.Second;
+	s=s*24/60;
+	// s=s+224;
+	s=s+8;
+	matrix[s][0]=0xFF; // set pixel red
 }
 
 void drawgraphs(){
 	int graphwidth=6;
 	int graphheight=8;
-	int graphstartx=26;
+	int graphstartx=0;
 	int z,y,i,t,c,d,p;
 	char backred = 0x00;
 	char backblue =0x00;
 	char backgreen =0x00;
 	char red=0xff;
-	char green =0xff;
-	char blue =0xff;
+	char green =0x00;
+	char blue =0x00;
 	t=BMPtemperature;
 	i=0;
+	if(t<10){
+		blue=0xff;
+		red=0x00;
+		green=0x00;
+		}
+		else{
+			if(t<20){
+				red=0x0f;
+				green=0x4f;
+				blue=0x0f;
+			}
+		}
+	
 	d=graphheight*graphwidth;
 	c=d*t/60;
 	if(c>d)c=d;
@@ -1249,7 +1278,7 @@ void GetGPSData(){
 				gpsmsg[gpsmsgindex]='\0';  // null terminate
 				gpsstring=gpsmsg;
 				// Process GPS Message 
-				if(debugging=='Y'){
+				if(DEBUGGPS=='Y'){
 					Serial.print("GPS:");
 					Serial.println(gpsstring);
 				}
