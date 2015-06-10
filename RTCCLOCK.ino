@@ -1,5 +1,5 @@
 /*
-xmit - 4S watch 13 jmp to 0x000
+tm xmit - 4S watch 13 jmp to 0x000
 // Stuarts code to drive Colourduino and TM1638 from GPS and DS1307 RTC
 *	This code is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public
  *	License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.
@@ -8,7 +8,9 @@ xmit - 4S watch 13 jmp to 0x000
  *	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  *	Lesser General Public License for more details.
  
-// RF module needs external 3.3v supply plus decoupling capacitor
+tm should always hold the current most valid time source
+ 
+ // RF module needs external 3.3v supply plus decoupling capacitor
 
 // Reads GPS on serial 3
 // if GPS invalid:Reads the RTC 
@@ -44,9 +46,10 @@ XX: self reset
 
 //****************************************************
 // define the modes that we can work as
-#define RTCMODE 0
-#define GPSMODE 1
-#define NUMMODES 2
+#define RTCMODE 0  // running off RTC
+#define GPSMODE 1	// running from GPS
+#define SYSMODE 3 	// running off system clock
+#define NUMMODES 3
 #define DEBUGWATCHDOG true
 #define DEBUGI2C false
 #define DEBUGMATRIX false
@@ -54,9 +57,9 @@ XX: self reset
 #define DEBUGREPORT true
 #define DEBUGINBOX false
 #define DEBUGTIME false
-#define DEBUGBMP false
+#define DEBUGBMP true
 #define MATRIXENABLED true
-#define MARQUEEENABLED false
+#define MARQUEEENABLED true
 #define RFENABLED true
 #define DEBUGRF false
 // GPS Definitions
@@ -110,7 +113,7 @@ unsigned long RFtimer; // Poll timer
 // TM1638(byte dataPin, byte clockPin, byte strobePin, boolean activateDisplay = true, byte intensity = 7);
 TM1638 dm (5, 6, 7);
 tmElements_t tm;   	// storage for time components
-time_t time_now;    // storage for local clock
+time_t timeNow;    // storage for local clock
 
 SFE_BMP180 pressure_sensor; // define the BMP180
 double Altitude,Pressure;//BMP180 variables
@@ -130,12 +133,11 @@ unsigned long reportInterval=2000;
 unsigned long gapSecond=0;
 unsigned long lasttime=0;
 unsigned long thistime=0;	// Time handles
-unsigned long timeNow=0;
+unsigned long millisNow=0;
 unsigned long NextTimeSyncTime=0;
 unsigned long NextTimeSyncInterval=10000; // 10 seconds
 unsigned long displayNextUpdateTime=0;
-unsigned long displayUpdateInterval=10000; // 10 seconds
-String 	rtctimestring="000000";
+unsigned long displayUpdateInterval=2000; // 5 seconds
 boolean dots=0;
 boolean moduleOff=0;
 // setup mode 
@@ -155,8 +157,8 @@ int 	i2caddresses[MAXI2CDEVICES];
 int	 	index=0;
 char 	msgfrommount[MAXMOUNTMSGLEN];
 int 	msgfrommountindex=0;
-String gpsstring="                                                                               ";
-String frommountstring="";
+String 	gpsstring="                                                                               ";
+String 	frommountstring="";
 char 	gpsmsg[GPSBUFFERLEN];
 unsigned int gpsmsgindex=0;
 char 	msgtomount[MAXMOUNTMSGLEN];
@@ -167,7 +169,7 @@ int 	fontheight=7;
 int 	fontwidth=5;
 char 	timearray[6]; // string for current valid time
 
-int inboxsensor=0;
+int 	inboxsensor=0;
 long inboxchecktime=0;
 long inboxcheckinterval=5000;
 
@@ -291,7 +293,7 @@ const unsigned char font_5x7[][5] = { // Font Table
         { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
 };
 
-String marquee="Initialising                                  ";
+String marquee="Initialising                                                                             ";
 
 void checkinboxsensor(){
 	if(timeNow>inboxchecktime){
@@ -305,46 +307,51 @@ void checkinboxsensor(){
 }
 
 void gettime(){
-	timeNow=millis(); // timer for local loop triggers
-  if (RTC.read(tm)) {
-		rtcokFlag=true;
-		rtctimestring=getrtctime();
-	}	
-	else	{
-		rtcokFlag=false;
-    	if (RTC.chipPresent()) {
-		  Serial.println("The DS1307 RTC is stopped.  Attempting to initialise");
-		  setupRTC();
-		} else {
-		Serial.println("DS1307 read error!  Please check the circuitry.");
-		Serial.println();
-		}
-	}
+	millisNow=millis(); // timer for local loop triggers
+	timeNow=now(); // get the current time stamp
   // get hrs and mins in usable format
 	if(gpsfixvalid=="A"){  // check for valid time from GPS
 		gpsfixtime.toCharArray(timearray,6);
 		currentmode=GPSMODE;
+		long int t=gpsfixtime.toInt();
+		if(DEBUGTIME)Serial.println("GPS Fix Time" + gpsfixtime  + "  ToInt:" + String(t));
+		tm.Hour=t/10000;
+		t=t % 10000; // mod 10000
+		tm.Minute=t/100;
+		t=t % 100;
+		tm.Second=t;
+		t=gpsfixdate.toInt();
+		tm.Day = t/10000;
+		t=t % 10000;
+		tm.Month = t/100;
+		t=t % 100;
+		t=t+2000-1970;
+		tm.Year =	t;
 	}	
 	else{
 		// get rtc time instead
-		rtctimestring.toCharArray(timearray,6);
+		if (RTC.read(tm)) {
+			rtcokFlag=true;
 			currentmode=RTCMODE;
-	}
-	time_now=now(); // set the current time stamp
-}
-
-String twochars(int number){
-	if(number==0) {
-		return"00";
-	}
-	else {
-		if (number > 0 && number < 10)	{
-			return "0"+String(number);
-		}
+		}	
 		else	{
-			return String(number);
+			rtcokFlag=false;
+			if (RTC.chipPresent()) {
+				if(DEBUGTIME)Serial.println("The DS1307 RTC is stopped.  Attempting to initialise");
+				setupRTC();
+			} else {
+				if(DEBUGTIME)Serial.println("DS1307 read error!  Please check the circuitry.");
+			}
+			// load tm from system clock - NEED REST OF PARMS
+			tm.Hour=hour(timeNow);
+			tm.Minute=minute(timeNow);
+			tm.Second=second(timeNow);
+			tm.Day=day(timeNow);
+			tm.Month=month(timeNow);
+			tm.Year=year(timeNow);
 		}
 	}
+	
 }
 
 void print2digits(int number) {
@@ -395,7 +402,7 @@ void setup() {
 	// Set the processor time
 	setTime(0,0,0,1,1,2015);
 	// get time
-	time_now=now();
+	timeNow=now();
 	
 	// Start I2C
 	int rtn = I2C_ClearBus(); // clear the I2C bus first before calling Wire.begin()
@@ -503,12 +510,8 @@ void loop(){
 		checkDisplayTimer();
 		checkButtons();
 		if(DEBUGREPORT)checkReport(); // see if we need to report
-		
-		// check for GPS data
-		if(Serial3.available()>0)
-			{
-			GetGPSData();
-		}
+		if(Serial3.available()>0)GetGPSData();// check for GPS data
+		if(Serial.available()>0)readconsole();// check for console data
 		checktimesync(); // keep RTC in sync with GPS if available
 		checkinboxsensor();
 		pollRF(); // poll the rf receivers
@@ -518,6 +521,11 @@ void loop(){
 		}
 		
 	}
+
+void readconsole(){  // we have serial console data
+		char inchar=Serial.read();
+		if(GPSPASSTHRU)Serial3.write(inchar);
+}
 	
 void readRF(){
 	if(radio.read( &RFpacketin, sizeof(RFpacketin) )){
@@ -657,6 +665,8 @@ int offset=8; // shift clock x
 		backblue=BMPtemperature;
 		backblue=backblue &0x0c;
 	// time should be in timearray
+	String localtime=timestring();
+	localtime.toCharArray(timearray,6);
 	if(gpsfixvalid=="V"){
 		backblue=0x0F;
 	}
@@ -757,15 +767,12 @@ void drawgraphs(){
 
 void sendToMatrix(){  	// draw something out to LED grid displays
 	char c;
-	// get hrs and mins in usable format
-	if(gpsfixvalid=="A"){  // check for valid time from GPS
-		//reload tm and write it to the RTC
-		long int t=gpsfixtime.toInt();	
-		gpsfixtime.toCharArray(timearray,6);
-	}	
+	
 	
 	if(displaymode==0){
-		
+		// get hrs and mins in usable format
+	String localtime=timestring();
+	localtime.toCharArray(timearray,6);
 		// wants 
 		//  '#' 
 		// 		type = 0x01
@@ -891,7 +898,7 @@ void checktimesync(){
 		// system clock
 		if((gpsfixvalid=="A")){ //reload tm and write it to the RTC
 			long int t=gpsfixtime.toInt();
-			Serial.println("GPS Fix Time" + gpsfixtime  + "  ToInt:" + String(t));
+			if(DEBUGTIME)Serial.println("GPS Fix Time" + gpsfixtime  + "  ToInt:" + String(t));
 			tm.Hour=t/10000;
 			t=t % 10000; // mod 10000
 			tm.Minute=t/100;
@@ -918,30 +925,32 @@ void checktimesync(){
 		}
 		// set system time to RTC
 		// need to validate data before setting
-		if(tm.Hour>-1&&tm.Hour<24&&tm.Minute>-1&&tm.Minute<60){
-			setTime(tm.Hour,tm.Minute,tm.Second,tm.Day,tm.Month,tm.Year-30);
-			if(DEBUGTIME)Serial.println("system clock set to tm");
-		}
-		else{
-			if(DEBUGTIME)Serial.println("time in tm not valid for sync");
+		if(rtcokFlag){
+			if(tm.Hour>-1&&tm.Hour<24&&tm.Minute>-1&&tm.Minute<60){
+				setTime(tm.Hour,tm.Minute,tm.Second,tm.Day,tm.Month,tm.Year-30);
+				if(DEBUGTIME)Serial.println("system clock set to tm");
+			}
+			else{
+				if(DEBUGTIME)Serial.println("time in tm not valid for sync");
+			}
 		}
 	}
 }
 	
 void checkDisplayTimer(){
-  if (timeNow > waitcheckTime) {
+  if (millisNow > waitcheckTime) {
     dots = !dots;
     drawToModule();
-    waitcheckTime = timeNow+ intervalcheckTime;
+    waitcheckTime = millisNow+ intervalcheckTime;
   }
   if(tm.Minute!=lastminute){
 	  lastminute=tm.Minute;
 	  buildMatrix(); // build the raster to display on the matrix
 	  if(MATRIXENABLED)sendToMatrix();
-	  displayNextUpdateTime=timeNow+displayUpdateInterval; // reset LED display timer
+	  displayNextUpdateTime=millisNow+displayUpdateInterval; // reset LED display timer
   }
-  if(timeNow>displayNextUpdateTime){
-	  displayNextUpdateTime=timeNow+displayUpdateInterval; // reset LED display timer
+  if(millisNow>displayNextUpdateTime){
+	  displayNextUpdateTime=millisNow+displayUpdateInterval; // reset LED display timer
 	  if(MARQUEEENABLED)buildmarquee();
 	  buildMatrix(); // build the raster to display on the matrix
 	  if(MATRIXENABLED)sendToMatrix();
@@ -949,32 +958,45 @@ void checkDisplayTimer(){
 }
 
 void buildmarquee(){
+	String m=timestring();
+	if(m.length()<20){	
+	marquee=m;
 	
-	marquee=String(hour(time_now))+":"+ String(minute(time_now)) +":"+ String(second(time_now));  // Print system time
-			if(isAM(time_now)) marquee=marquee+" AM ";
-			if(isPM(time_now)) marquee=marquee+" PM ";
+	// String(hour(timeNow))+":"+ String(minute(timeNow)) +":"+ String(second(timeNow));  // Print system time
+			//if(isAM(timeNow)) marquee=marquee+String(" AM ");
+			//if(isPM(timeNow)) marquee=marquee+" PM ";
 			// marquee=marquee+String(dayShortStr(weekday(time_now)))+" ";
 			// marquee=marquee+String(day(time_now))+" "+String(monthShortStr(month(time_now)))+" "+String(year(time_now));
+	} else{
+		marquee=String("Timestring invalid ");
+	}
 }
 
 void checkReport() {
-		if( timeNow> reportTime){ // if we're due
-			reportTime=timeNow+reportInterval; // reset interval
+		if( millisNow> reportTime){ // if we're due
+			reportTime=millisNow+reportInterval; // reset interval
 			Serial.println("*******************************");
-			if(MARQUEEENABLED)Serial.println(marquee);
-			Serial.print("Onboard Clock:"+String(hour(time_now))+":"+ String(minute(time_now))) +":"+ String(second(time_now));  // Print system time
-			if(isAM(time_now)) Serial.println("AM");
-			if(isPM(time_now)) Serial.println("PM");
+			if(MARQUEEENABLED)Serial.println("Marquee:"+String(marquee));
+			Serial.print("Onboard Clock:"+String(hour(timeNow))+":"+ String(minute(timeNow))) +":"+ String(second(timeNow));  // Print system time
+			if(isAM(timeNow)) Serial.println("AM");
+			if(isPM(timeNow)) Serial.println("PM");
 			// now() time in seconds since 1/1/70
-			Serial.println(String(day(time_now))+":"+String(month(time_now))+":"+String(year(time_now)));             // The day now (1-31)
-			Serial.println("DOTW:"+String(weekday(time_now)));         // Day of the week, Sunday is day 1
+			Serial.println(String(day(timeNow))+":"+String(month(timeNow))+":"+String(year(timeNow)));             // The day now (1-31)
+			Serial.println("DOTW:"+String(weekday(timeNow)));         // Day of the week, Sunday is day 1
  			//Serial.println(String(dayStr(weekday(time_now)))+" "+String(day(time_now))+String(monthStr(month(time_now))));
 			//Serial.println(String( monthShortStr(month(time_now)))+" "+String(dayShortStr(weekday(time_now))));
 			Serial.println("Time Status:"+String(timeStatus()));
-			Serial.println("Time Now:"+String(time_now));
+			Serial.println("Time Now:"+String(timeNow));
 			if(rtcokFlag==true){
-				Serial.print("RTC Ok, Time = ");
-				print2digits(tm.Hour);
+				Serial.println("RTC Ok");
+				
+			}
+			else
+			{
+				Serial.println("RTC not valid.");
+			}
+			Serial.print("tm. Time = ");
+		print2digits(tm.Hour);
 				Serial.write(':');
 				print2digits(tm.Minute);
 				Serial.write(':');
@@ -986,12 +1008,6 @@ void checkReport() {
 				Serial.write('/');
 				Serial.print(tmYearToCalendar(tm.Year));
 				Serial.println();
-			}
-			else
-			{
-				Serial.println("RTC not valid.");
-			}
-		
 			Serial.println("GPS fix status:" + gpsfixvalid);
 			if((gpsfixvalid=="A")||(gpsfixvalid="V")){
 				Serial.println("GPS fix time:" + gpsfixtime + " Date:"+gpsfixdate);
@@ -1010,7 +1026,7 @@ void checkReport() {
 	}
 
 void checkButtons(){
-  if (timeNow > waitcheckButtons) {
+  if (millisNow > waitcheckButtons) {
     // dm.setLEDs(0);
     byte buttons=dm.getButtons();
     if(buttons>0){
@@ -1024,7 +1040,7 @@ void checkButtons(){
         }
       }
     }
-    waitcheckButtons +=intervalcheckButtons;
+    waitcheckButtons =millisNow+intervalcheckButtons;
   }
 }
 
@@ -1036,14 +1052,27 @@ void drawToModule(){
     // if (pos>2) pos=1;
 	// get hrs and mins in usable format
 	dm.clearDisplay();
-	if(gpsfixvalid=="A"){  // check for valid time from GPS
-		// gpsfixtime.toCharArray(timearray,6);
-		dm.setDisplayToString(gpsfixtime,(dots * 80),pos);
-	}
-	else{	// use rtc time instead
-	dm.setDisplayToString(getrtctime(),(dots * 80),pos);
-	}
+	
+	dm.setDisplayToString(timestring(),(dots * 80),pos);
+	
    }
+}
+
+String timestring()   {
+return twochars(tm.Hour)+twochars(tm.Minute)+twochars(tm.Second);
+}
+String twochars(int number){
+	if(number==0) {
+		return"00";
+	}
+	else {
+		if (number > 0 && number < 10)	{
+			return "0"+String(number);
+		}
+		else	{
+			return String(number);
+		}
+	}
 }
 
 void buttonEvent(byte inp){
@@ -1170,9 +1199,7 @@ void buttonEvent(byte inp){
 
 // getrtctime
 // returns time as a 6 character string with zero padding on seconds and minutes
-String getrtctime()   {
-return twochars(tm.Hour)+twochars(tm.Minute)+twochars(tm.Second);
-}
+
 
 void setupRTC() {// reset the RTC
 	bool parse=false;
@@ -1180,7 +1207,7 @@ void setupRTC() {// reset the RTC
 	timeNow=now(); // get current system time
 	tm.Hour=hour(timeNow);
 	tm.Minute=minute(timeNow);
-	tm.Second=second(time_now);
+	tm.Second=second(timeNow);
 	tm.Year=year(timeNow)-30;
   tm.Month=month(timeNow);
 	tm.Day=day(timeNow);
@@ -1497,7 +1524,6 @@ void PrintGPSMessage(){
 	}
 	Serial.println();
 }
-
 
 int I2C_ClearBus() {
 	/**
