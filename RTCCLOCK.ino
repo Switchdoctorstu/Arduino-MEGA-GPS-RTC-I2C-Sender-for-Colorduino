@@ -62,14 +62,15 @@ XX: self reset
 #define MARQUEEENABLED true
 #define RFENABLED true
 #define DEBUGRF false
+#define DEBUGMARQUEE true
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
 #define MAXI2CDEVICES 20
 #define MAGNOADDRESS 0x1e
 #define MAXERRORCOUNT 5
-#define MAXMOUNTMSGLEN 128
-#define GPSPASSTHRU true  // enable pass-thru of GPS data so PC sees GPS
+//#define MAXMOUNTMSGLEN 128
+#define GPSPASSTHRU false  // enable pass-thru of GPS data so PC sees GPS
 
 #define FIRSTMODULE 4  // i2c address of 1st module
 #define LASTMODULE 7	// i2c address of last module
@@ -155,14 +156,9 @@ const char *monthName[12] = {// array of month names
 int 	i2cdevicecount=0;  // count of attached I2C devices
 int 	i2caddresses[MAXI2CDEVICES];
 int	 	index=0;
-char 	msgfrommount[MAXMOUNTMSGLEN];
-int 	msgfrommountindex=0;
 String 	gpsstring="                                                                               ";
-String 	frommountstring="";
 char 	gpsmsg[GPSBUFFERLEN];
 unsigned int gpsmsgindex=0;
-char 	msgtomount[MAXMOUNTMSGLEN];
-int 	msgtomountindex=0;
 int 	trigger=0;
 int 	i2cmagno=0;
 int 	fontheight=7;
@@ -293,9 +289,15 @@ const unsigned char font_5x7[][5] = { // Font Table
         { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
 };
 
-String marquee="Initialising                                                                             ";
+char marquee[64]; // banner for rolling text
+String banner="Initialising";
+/****************************************************************************/
+/*																			*/
+/* Code Starts Here															*/
+/*																			*/
+/****************************************************************************/
 
-void checkinboxsensor(){
+void checkinboxsensor(){  // reads the inbox sensor pin
 	if(timeNow>inboxchecktime){
 		inboxchecktime+=inboxcheckinterval;
 		inboxsensor=analogRead(INBOXPIN);
@@ -306,7 +308,8 @@ void checkinboxsensor(){
 	}
 }
 
-void gettime(){
+void gettime(){ //			Loads all of the time variables from GPS>RTC>System clock		//
+
 	millisNow=millis(); // timer for local loop triggers
 	timeNow=now(); // get the current time stamp
   // get hrs and mins in usable format
@@ -369,7 +372,7 @@ ISR(WDT_vect) {// Watchdog timer interrupt.
 
 	// flash pin 13 to signal error
 	pinMode(13,OUTPUT);
-	for(int n=0;n<1000;n++){
+	for(int n=0;n<10;n++){
 		digitalWrite(13,LOW);
 		delay(20);
 		digitalWrite(13,HIGH);
@@ -378,7 +381,7 @@ ISR(WDT_vect) {// Watchdog timer interrupt.
 	asm volatile ("  jmp 0"); // Bootstrap back to zero
 }
 
-void setup() {
+void setup() {  // Main Setup Routine
 	wdt_disable(); // disable the watchdog
 	Serial.begin(19200);
 	Serial3.begin(9600); // GPS on Mega
@@ -958,25 +961,40 @@ void checkDisplayTimer(){
 }
 
 void buildmarquee(){
-	String m=timestring();
-	if(m.length()<20){	
-	marquee=m;
+	//String m;
+	// String msg = String("initialising marquee                                                           ");
+	//msg = timestring();
+	banner=String("banner:");
+	banner+= hour(timeNow);
+    banner=String(banner+" : ");
+	banner= String(banner+String(minute(timeNow)));
+      banner=String(banner+String(" : "));
+	  banner= String(banner+String(second(timeNow)));  
+			if(isAM(timeNow)) banner=String(banner+" AM ");
+			if(isPM(timeNow)) banner=String(banner+" PM ");
+			banner=String(banner+dayShortStr(weekday(timeNow))+" ");
+			banner=String(banner+String(day(timeNow))+" "+String(monthShortStr(month(timeNow)))+" "+String(year(timeNow)));
+	// banner = String(banner+" End of Message");
 	
-	// String(hour(timeNow))+":"+ String(minute(timeNow)) +":"+ String(second(timeNow));  // Print system time
-			//if(isAM(timeNow)) marquee=marquee+String(" AM ");
-			//if(isPM(timeNow)) marquee=marquee+" PM ";
-			// marquee=marquee+String(dayShortStr(weekday(time_now)))+" ";
-			// marquee=marquee+String(day(time_now))+" "+String(monthShortStr(month(time_now)))+" "+String(year(time_now));
-	} else{
-		marquee=String("Timestring invalid ");
-	}
+        unsigned int l =banner.length()+1;
+        if(l<62){
+			if(DEBUGMARQUEE)Serial.println(banner);
+	banner.toCharArray(marquee,l);
+	marquee[l+1]=0x00;
+        }else{
+          banner=String("too long");
+        banner.toCharArray(marquee,banner.length());
+        }
 }
 
 void checkReport() {
 		if( millisNow> reportTime){ // if we're due
 			reportTime=millisNow+reportInterval; // reset interval
 			Serial.println("*******************************");
-			if(MARQUEEENABLED)Serial.println("Marquee:"+String(marquee));
+			if(MARQUEEENABLED)Serial.println("Marquee:");
+			if(MARQUEEENABLED)Serial.println(String(banner);
+			Serial.println("*******************************");
+			
 			Serial.print("Onboard Clock:"+String(hour(timeNow))+":"+ String(minute(timeNow))) +":"+ String(second(timeNow));  // Print system time
 			if(isAM(timeNow)) Serial.println("AM");
 			if(isPM(timeNow)) Serial.println("PM");
