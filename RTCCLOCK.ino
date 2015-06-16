@@ -35,7 +35,7 @@ XX: RF handler
 OK: Temperature from thermistor on AO
 OK: adding bmp180 module
 OK: startup time from rtc 
-XX: Marquee - crashes arduino!!
+XX: Marquee - working on scrolling text
 OK: Added debug modes to clear serial noise
 OK: Added gps handler
 OK: Added I2C display module handler
@@ -117,9 +117,10 @@ tmElements_t tm;   	// storage for time components
 time_t timeNow;    // storage for local clock
 
 SFE_BMP180 pressure_sensor; // define the BMP180
-double Altitude,Pressure;//BMP180 variables
-double baselinepressure; // baseline pressure
+double BMPaltitude,BMPpressure;//BMP180 variables
+double BMPbaselinepressure; // baseline pressure
 double BMPtemperature;  // Temperature of device
+double BMPtemperaturehistory[48];
 
 int i2cdelay=10;//wait after each packet
 
@@ -130,7 +131,7 @@ unsigned long waitcheckButtons=0; // timer for buttons
 unsigned long intervalcheckTime=1000;
 unsigned long intervalcheckButtons=500;
 unsigned long reportTime=1000;
-unsigned long reportInterval=2000;
+unsigned long reportInterval=5000;
 unsigned long gapSecond=0;
 unsigned long lasttime=0;
 unsigned long thistime=0;	// Time handles
@@ -138,7 +139,7 @@ unsigned long millisNow=0;
 unsigned long NextTimeSyncTime=0;
 unsigned long NextTimeSyncInterval=10000; // 10 seconds
 unsigned long displayNextUpdateTime=0;
-unsigned long displayUpdateInterval=2000; // 5 seconds
+unsigned long displayUpdateInterval=1000; // 5 seconds
 boolean dots=0;
 boolean moduleOff=0;
 // setup mode 
@@ -146,6 +147,10 @@ int 	currentmode=RTCMODE;
 int 	displaymode=1; // major display mode 0=char 1=raster
 boolean rtcokFlag=false;
 boolean gpstimeokFlag=false;
+
+
+int screenwidth=32;
+
 
 const char *monthName[12] = {// array of month names
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -164,7 +169,6 @@ int 	i2cmagno=0;
 int 	fontheight=7;
 int 	fontwidth=5;
 char 	timearray[6]; // string for current valid time
-
 int 	inboxsensor=0;
 long inboxchecktime=0;
 long inboxcheckinterval=5000;
@@ -289,8 +293,9 @@ const unsigned char font_5x7[][5] = { // Font Table
         { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
 };
 
-char marquee[64]; // banner for rolling text
 String banner="Initialising";
+int bannerpointer=0; // pointer into banner messsage for marquee display 
+
 /****************************************************************************/
 /*																			*/
 /* Code Starts Here															*/
@@ -437,10 +442,10 @@ void setup() {  // Main Setup Routine
 
   // Get the baseline pressure:
   
-  baselinepressure = getPressure();
+  BMPbaselinepressure = getPressure();
   if(DEBUGBMP){
 	Serial.print("baseline pressure: ");
-	Serial.print(baselinepressure);
+	Serial.print(BMPbaselinepressure);
 	Serial.println(" mb");
   }  
   
@@ -450,10 +455,11 @@ void setup() {  // Main Setup Routine
 	waitcheckButtons = t + intervalcheckButtons;
 	displayNextUpdateTime=t+displayUpdateInterval;
 	RFtimer=t+RFinterval;
-  NextTimeSyncTime=t; // trigger initial time sync
+	NextTimeSyncTime=t; // trigger initial time sync
 	
   if(RFENABLED)setupRF(); // start the radio 
-   
+   gettime();
+   buildmarquee();
 }
 
 void watchdogSetup(void) {
@@ -712,6 +718,67 @@ int offset=8; // shift clock x
 	drawseconds();
 }
 
+void bannertomatrix(){
+	int bannerlength=banner.length();
+	int bytecount=bannerlength*(fontwidth+1);
+	int x,y,c,b,z,p=0;
+	char fontbyte;
+	int offset=0;
+	int intensity = 128;
+	char backred=0x00;
+	char backgreen=0x04;
+	char backblue=0x04;
+	char red=0xFF;
+	char green = 0xFF;
+	char blue=0xFF;
+	char bannerchar;
+clearMatrix();
+	for(x=0;x<screenwidth;x++){ // move along the x
+		// calculate the bit pattern for the column
+		bannerchar=banner.charAt(((bannerpointer+x)%bytecount)/(fontwidth+1));  // c contains character from banner
+		b=(bannerpointer+x)%(fontwidth+1); // number of bits into the font
+		p=bannerchar-32;
+		if(DEBUGMATRIX){
+			if((x%(fontwidth+1))==0) {
+				Serial.print("Banner Char=");
+				Serial.print(bannerchar,HEX);
+				Serial.print(" Pointer:");
+				Serial.print(p,HEX);
+				Serial.print(" Bits into font=");
+				Serial.println(b,HEX);
+				
+			}
+		}
+		if(b==fontwidth){
+			fontbyte=0x00;
+		}else{
+		fontbyte=font_5x7[p][b];	
+		}
+		for(y=0;y<fontheight+1;y++){ // cycle thru bits
+			z=(y*32)+x+offset;
+				if(fontbyte&128>>y){ // bit is set
+					if(DEBUGMATRIX)Serial.print("1");
+					matrix[z][0]=red;
+					matrix[z][1]=green;
+					matrix[z][2]=blue;
+				} 
+				else { // bit is not set
+					if(DEBUGMATRIX)Serial.print("0");
+					matrix[z][0]=backred;
+					matrix[z][1]=backgreen;
+					matrix[z][2]=backblue;		
+				}	
+			}
+			if(DEBUGMATRIX)Serial.println();
+		
+	}
+	drawseconds();
+	
+	// check to see if we're near the end of the message
+	bannerpointer++;	// move the pointer on
+	if(bannerpointer+screenwidth>bytecount)bannerpointer=0;
+}
+
 void drawseconds(){
 	int s=tm.Second;
 	s=s*24/60;
@@ -765,6 +832,19 @@ void drawgraphs(){
 			}
 			i++;
 		}
+	}
+	// now the pressure
+	z=BMPpressure-BMPbaselinepressure;
+	z=4/z+4;
+	for(y=0;y<8;y++){
+		if(y<z){
+            matrix[y*32+6][1]=0xff;
+            matrix[y*32+7][1]=0xff;
+}
+		if(y>z){
+  matrix[y*32+6][2]=0xff;
+  matrix[y*32+7][2]=0xff;
+}
 	}
 }
 
@@ -827,16 +907,16 @@ void sendToMatrix(){  	// draw something out to LED grid displays
 					Wire.write(0x02); // type = 0x02 = raster
 					char t=line*16+colour;
 					Wire.write(t);
-					if(DEBUGMATRIX) Serial.print("A:"+String(m)+" ");
+					if(DEBUGI2C) Serial.print("A:"+String(m)+" ");
 					int z=((m-FIRSTMODULE)*8)+(line*32);
 					for(int p=z;p<(z+8);p++){
 						Wire.write(matrix[p][colour]);
-						if(DEBUGMATRIX) {
+						if(DEBUGI2C) {
 							Serial.print(matrix[p][colour],HEX);
 							Serial.print(",");
 						}
 					}
-					if(DEBUGMATRIX) Serial.println();
+					if(DEBUGI2C) Serial.println();
 					// Pad out to 16 bytes
 					Wire.write(0x00);
 					Wire.write(0x00);
@@ -955,7 +1035,18 @@ void checkDisplayTimer(){
   if(millisNow>displayNextUpdateTime){
 	  displayNextUpdateTime=millisNow+displayUpdateInterval; // reset LED display timer
 	  if(MARQUEEENABLED)buildmarquee();
+	  
+	  // change the display based on the seconds count
+	  if((tm.Second<5)||(tm.Second>55)){
 	  buildMatrix(); // build the raster to display on the matrix
+	  } else{
+		  if(MARQUEEENABLED){
+			  bannertomatrix();
+		}else{
+				  buildMatrix();
+		}
+	  }
+	  
 	  if(MATRIXENABLED)sendToMatrix();
   }
 }
@@ -964,27 +1055,22 @@ void buildmarquee(){
 	//String m;
 	// String msg = String("initialising marquee                                                           ");
 	//msg = timestring();
-	banner=String("banner:");
+	BMPpressure=getPressure(); // get the current pressure
+			BMPaltitude=pressure_sensor.altitude(BMPpressure,BMPbaselinepressure);
+			Serial.println("Altitude:"+String(BMPaltitude)+" Temperature:"+String(BMPtemperature));
+			
+	banner=String("S+P :");
 	banner+= hour(timeNow);
-    banner=String(banner+" : ");
+    banner+=":";
 	banner= String(banner+String(minute(timeNow)));
-      banner=String(banner+String(" : "));
+      banner=String(banner+String(":"));
 	  banner= String(banner+String(second(timeNow)));  
-			if(isAM(timeNow)) banner=String(banner+" AM ");
-			if(isPM(timeNow)) banner=String(banner+" PM ");
+			if(isAM(timeNow)) banner=String(banner+"AM ");
+			if(isPM(timeNow)) banner=String(banner+"PM ");
 			banner=String(banner+dayShortStr(weekday(timeNow))+" ");
 			banner=String(banner+String(day(timeNow))+" "+String(monthShortStr(month(timeNow)))+" "+String(year(timeNow)));
 	// banner = String(banner+" End of Message");
 	
-        unsigned int l =banner.length()+1;
-        if(l<62){
-			if(DEBUGMARQUEE)Serial.println(banner);
-	banner.toCharArray(marquee,l);
-	marquee[l+1]=0x00;
-        }else{
-          banner=String("too long");
-        banner.toCharArray(marquee,banner.length());
-        }
 }
 
 void checkReport() {
@@ -992,7 +1078,7 @@ void checkReport() {
 			reportTime=millisNow+reportInterval; // reset interval
 			Serial.println("*******************************");
 			if(MARQUEEENABLED)Serial.println("Marquee:");
-			if(MARQUEEENABLED)Serial.println(String(banner);
+			if(MARQUEEENABLED)Serial.println(String(banner));
 			Serial.println("*******************************");
 			
 			Serial.print("Onboard Clock:"+String(hour(timeNow))+":"+ String(minute(timeNow))) +":"+ String(second(timeNow));  // Print system time
@@ -1014,7 +1100,7 @@ void checkReport() {
 				Serial.println("RTC not valid.");
 			}
 			Serial.print("tm. Time = ");
-		print2digits(tm.Hour);
+			print2digits(tm.Hour);
 				Serial.write(':');
 				print2digits(tm.Minute);
 				Serial.write(':');
@@ -1036,11 +1122,18 @@ void checkReport() {
 			else{
 				Serial.println("GPS fix Invalid");
 			}			
-			Pressure=getPressure(); // get the current pressure
-			Altitude=pressure_sensor.altitude(Pressure,baselinepressure);
-			Serial.println("Altitude:"+String(Altitude)+" Temperature:"+String(BMPtemperature));
+			BMPpressure=getPressure(); // get the current pressure
+			BMPaltitude=pressure_sensor.altitude(BMPpressure,BMPbaselinepressure);
+			Serial.println("Altitude:"+String(BMPaltitude)+" Temperature:"+String(BMPtemperature));
 			Serial.println("Sync:"+String(NextTimeSyncTime-timeNow));
+		
+			if(DEBUGMARQUEE){
+				Serial.print("BannerPointer:");
+				Serial.println(bannerpointer,DEC);
+			}
 		}
+		
+		
 	}
 
 void checkButtons(){
