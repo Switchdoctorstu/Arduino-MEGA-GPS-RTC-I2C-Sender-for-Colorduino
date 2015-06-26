@@ -50,7 +50,8 @@ XX: self reset
 #define GPSMODE 1	// running from GPS
 #define SYSMODE 3 	// running off system clock
 #define NUMMODES 3
-#define DEBUGWATCHDOG true
+#define DEBUGBACKGROUND true 
+#define DEBUGWATCHDOG false
 #define DEBUGI2C false
 #define DEBUGMATRIX false
 #define DEBUGGPS false
@@ -58,11 +59,11 @@ XX: self reset
 #define DEBUGINBOX false
 #define DEBUGTIME false
 #define DEBUGBMP true
+#define DEBUGMINITIME false
 #define MATRIXENABLED true
-#define MARQUEEENABLED true
 #define RFENABLED true
 #define DEBUGRF false
-#define DEBUGMARQUEE true
+#define DEBUGMATRIXMESSAGE true
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -74,13 +75,10 @@ XX: self reset
 
 #define FIRSTMODULE 4  // i2c address of 1st module
 #define LASTMODULE 7	// i2c address of last module
-
-#define RFCEPIN 49      // mega pins for RF module
-#define RFCSNPIN 53
-
 // some pins
 #define INBOXPIN A0
-
+#define RFCEPIN 49      // mega pins for RF module
+#define RFCSNPIN 53
 
 // Include the right libraries
 #include <Wire.h>
@@ -108,9 +106,18 @@ const uint64_t send_pipes[5] = { 0xF0F0F0F0D2LL, 0xF0F0F0F0C3LL, 0xF0F0F0F0B4LL,
 const uint64_t receive_pipes[5] = { 0x3A3A3A3AD2LL, 0x3A3A3A3AC3LL, 0x3A3A3A3AB4LL, 0x3A3A3A3AA5LL, 0x3A3A3A3A96LL };
 char RFpacketout[8]; // RF packet buffers
 char RFpacketin[8]; // RF packet buffers
-unsigned long RFinterval=10000; // 10 second RF poll
+unsigned long RFinterval=30055; // 30 second RF poll
 unsigned long RFtimer; // Poll timer
 
+struct sRGB{
+	char r;
+	char g;
+	char b;
+};
+
+typedef struct sRGB RGB;
+
+RGB pelcolour={0,0,0}; //picture element colour
 // TM1638(byte dataPin, byte clockPin, byte strobePin, boolean activateDisplay = true, byte intensity = 7);
 TM1638 dm (5, 6, 7);
 tmElements_t tm;   	// storage for time components
@@ -120,26 +127,29 @@ SFE_BMP180 pressure_sensor; // define the BMP180
 double BMPaltitude,BMPpressure;//BMP180 variables
 double BMPbaselinepressure; // baseline pressure
 double BMPtemperature;  // Temperature of device
-double BMPtemperaturehistory[48];
+double BMPTemperatureHistory[48];
+double BMPPressureHistory[48]; // 48 hour history
+unsigned long logtimer,loginterval=5050; // 5 seconds
+int logcounter=0; // count of log entries
 
-int i2cdelay=10;//wait after each packet
+int i2cdelay=5;//wait after each packet
 
 // Declare all the global vars
 int lastminute=0;
 unsigned long waitcheckTime=0; // timer for time checking
 unsigned long waitcheckButtons=0; // timer for buttons
-unsigned long intervalcheckTime=1000;
-unsigned long intervalcheckButtons=500;
-unsigned long reportTime=1000;
-unsigned long reportInterval=5000;
+unsigned long intervalcheckTime=1012;
+unsigned long intervalcheckButtons=503;
+unsigned long reportTime=1007;
+unsigned long reportInterval=5007;
 unsigned long gapSecond=0;
 unsigned long lasttime=0;
 unsigned long thistime=0;	// Time handles
 unsigned long millisNow=0;
 unsigned long NextTimeSyncTime=0;
-unsigned long NextTimeSyncInterval=10000; // 10 seconds
+unsigned long NextTimeSyncInterval=10023; // 10 seconds
 unsigned long displayNextUpdateTime=0;
-unsigned long displayUpdateInterval=1000; // 5 seconds
+unsigned long displayUpdateInterval=513; // 5 seconds
 boolean dots=0;
 boolean moduleOff=0;
 // setup mode 
@@ -148,9 +158,8 @@ int 	displaymode=1; // major display mode 0=char 1=raster
 boolean rtcokFlag=false;
 boolean gpstimeokFlag=false;
 
-
 int screenwidth=32;
-
+int screenheight=8;
 
 const char *monthName[12] = {// array of month names
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -194,6 +203,37 @@ int returncode=0; // generic return code
 
 // buffer to hold raster 4 modules *8*8
 unsigned char matrix[256][3];
+
+int minifontwidth=3;
+int minifontheight=5;
+const unsigned char font3x5[][3]={
+	 { 0x00, 0x00, 0x00 },               /*   - 0x20 - 32 */
+        { 0x00, 0x29, 0x00 },               /* ! - 0x21 - 33 */ 
+        { 0x00, 0x29, 0x00 },               /* " - 0x22 - 34 */ 
+        { 0x31, 0x10, 0x31 },               /* # - 0x23 - 35 */
+        { 0x24, 0x2a, 0x7f },               /* $ - 0x24 - 36 */
+        { 0x23, 0x13, 0x08 },               /* % - 0x25 - 37 */
+        { 0x36, 0x49, 0x55 },               /* & - 0x26 - 38 */
+        { 0x00, 0x05, 0x03 },               /* ' - 0x27 - 39 */
+        { 0x00, 0x1c, 0x22 },               /* ( - 0x28 - 40 */
+        { 0x00, 0x41, 0x22 },               /* ) - 0x29 - 41 */
+        { 0x14, 0x08, 0x3e },               /* * - 0x2a - 42 */
+        { 0x04, 0x31, 0x04 },               /* + - 0x2b - 43 */
+        { 0x00, 0x01, 0x02 },               /* , - 0x2c - 44 */
+        { 0x04, 0x04, 0x04 },               /* - - 0x2d - 45 */
+        { 0x00, 0x01, 0x00 },               /* . - 0x2e - 46 */
+        { 0x03, 0x04, 0x24 },               /* / - 0x2f - 47 */
+	{31,17,31}, // 0
+	{0,31,0}, // 1
+	{19,21,9}, // 2
+	{17,21,10}, //3
+	{28,4,31}, // 4
+	{29,21,22}, //5
+	{14,21,22},//6
+	{16,16,31},//7 
+	{31,21,31}, //8
+	{28,20,31} //9
+};
 
 const unsigned char font_5x7[][5] = { // Font Table
         { 0x00, 0x00, 0x00, 0x00, 0x00 },               /*   - 0x20 - 32 */
@@ -293,8 +333,10 @@ const unsigned char font_5x7[][5] = { // Font Table
         { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
 };
 
-String banner="Initialising";
-int bannerpointer=0; // pointer into banner messsage for marquee display 
+char matrixMessage[64];
+int matrixMessagePointer=0; // pointer into banner messsage for marquee display 
+boolean matrixMessageValid=false;
+int matrixMessageCursor=0; 
 
 /****************************************************************************/
 /*																			*/
@@ -303,7 +345,7 @@ int bannerpointer=0; // pointer into banner messsage for marquee display
 /****************************************************************************/
 
 void checkinboxsensor(){  // reads the inbox sensor pin
-	if(timeNow>inboxchecktime){
+	if(millisNow>inboxchecktime){
 		inboxchecktime+=inboxcheckinterval;
 		inboxsensor=analogRead(INBOXPIN);
 		if(DEBUGINBOX){
@@ -402,14 +444,14 @@ void setup() {  // Main Setup Routine
 	}
 	
 	
-	delay(1000);// let rtc settle
+	delay(2000);// let rtc settle
 	
 		Serial.println("Stuart's LED RTC - GPS and DS1307RTC V0.1");
 		Serial.println("-----------------------------------------");
 	
 	// Set the processor time
-	setTime(0,0,0,1,1,2015);
-	// get time
+	setTime(0,0,0,16,10,1964);
+	// get processor time
 	timeNow=now();
 	
 	// Start I2C
@@ -456,10 +498,11 @@ void setup() {  // Main Setup Routine
 	displayNextUpdateTime=t+displayUpdateInterval;
 	RFtimer=t+RFinterval;
 	NextTimeSyncTime=t; // trigger initial time sync
-	
+	logtimer=t;  // trigger initial log
   if(RFENABLED)setupRF(); // start the radio 
    gettime();
-   buildmarquee();
+   matrixMessageValid=false;
+   //banner=String("Started                                                                                    ");
 }
 
 void watchdogSetup(void) {
@@ -479,7 +522,7 @@ WDP0 = 1; // :For 2000ms Time-out
 // Enter Watchdog Configuration mode:
 WDTCSR |= (1<<WDCE) | (1<<WDE);
 // Set Watchdog settings:
-WDTCSR =  (1<<WDP3) | (0<<WDP2) | (0<<WDP1) | (0<<WDP0)  | (1<<WDIE);
+WDTCSR =  (1<<WDP3) | (1<<WDP2) | (1<<WDP1) | (0<<WDP0)  | (1<<WDIE);
 wdt_reset(); // reset the WDT timer
 //wdt_enable(); // enable watchdog
 // sei(); // enable interrupts
@@ -552,8 +595,8 @@ void readRF(){
 }
 
 void pollRF(){
-	if(timeNow>RFtimer){
-		RFtimer=timeNow+RFinterval; // reset the timer`
+	if(millisNow>RFtimer){
+		RFtimer=millisNow+RFinterval; // reset the timer`
 		// Build poll packet
 		RFpacketout[0]=0x23;
 		RFpacketout[7]=0x0d;
@@ -582,7 +625,7 @@ radio.startListening();
 	
 double getPressure() {
   char status;
-  double T,P,p0,a;
+  double T,P,p0,a,nullpoint;
 
   // You must first get a temperature measurement to perform a pressure reading.
   
@@ -622,34 +665,244 @@ double getPressure() {
         // Note also that the function requires the previous temperature measurement (T).
         // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
         // Function returns 1 if successful, 0 if failure.
-
+		T=BMPtemperature;
         status = pressure_sensor.getPressure(P,BMPtemperature);
         if (status != 0)
         {
-          return(P);
+			// we have a good reading so log it if needed
+			if(millisNow>logtimer){
+				// make sure we have valid data
+				nullpoint=0.0;
+				if((BMPtemperature!=nullpoint)&&(BMPpressure!=nullpoint)){
+					// shift the logs down
+					for(int l=screenwidth-1;l>-1;l--){
+						BMPPressureHistory[l+1]=BMPPressureHistory[l];
+						BMPTemperatureHistory[l+1]=BMPTemperatureHistory[l];
+					}
+					BMPPressureHistory[0]=BMPpressure;
+					BMPTemperatureHistory[0]=T;
+					logtimer=millisNow+loginterval;
+					logcounter++;
+				}
+			}
+			return(P);
+			break;
         }
-        else Serial.println("error retrieving pressure measurement\n");
+        else if(DEBUGBMP)Serial.println("error retrieving pressure measurement\n");
       }
-      else Serial.println("error starting pressure measurement\n");
+      else if(DEBUGBMP)Serial.println("error starting pressure measurement\n");
     }
-    else Serial.println("error retrieving temperature measurement\n");
+    else if(DEBUGBMP)Serial.println("error retrieving temperature measurement\n");
   }
-  else Serial.println("error starting temperature measurement\n");
+  else if(DEBUGBMP)Serial.println("error starting temperature measurement\n");
+  return(0);
 }
-	
-void clearMatrix(){
+
+void fillMatrix(struct sRGB rgb){ 
 	for(int p=0;p<256;p++){
-		for(int c=0;c<4;c++){
-		matrix[p][c]=0;
-		}
+		
+		matrix[p][0]=rgb.r;
+		matrix[p][1]=rgb.g;
+		matrix[p][2]=rgb.b;
 	}
 }	
+
+void writeMatrixSmall(char displayarray[]){ 
+	char fontbyte;
+	int xoffset=0;
+	int yoffset=2;
+	int z=0;
+	int intensity = 128;
+	char backred=0x00;
+	char backgreen=0x04;
+	char backblue=0x04;
+	char red=0xFF;
+	char green = 0xFF;
+	char blue=0xFF;
+	
+	/* // clear the matrix
+	pelcolour.r=0;
+	pelcolour.g=0;
+	pelcolour.b=0;
+	fillMatrix(pelcolour);
+	*/
+	
+	if(DEBUGMINITIME){
+		Serial.println();
+		Serial.print("minifontwidth:");
+		Serial.println(minifontwidth);
+		Serial.print("minifontheight:");
+		Serial.println(minifontheight);
+		//Serial.println("Minitime Local:"+localtime);
+		for(z=0;z<6;z++){
+			Serial.println(displayarray[z],HEX);
+		}
+	}
+	// display it in small font
+	int c,w,h;
+	char ch;
+	for(c=0;c<6;c++){ // cycle thru digits
+	ch=displayarray[c];
+	if((ch>0x20)&&(ch<0x40)){ // check char is valid
+		for(w=0;w<minifontwidth;w++){
+			fontbyte=font3x5[ch-32][w];
+			
+			for(h=0;h<minifontheight;h++){
+				z=(c*(minifontwidth+1))+((h+yoffset)*32)+w+xoffset;
+					if(fontbyte&1<<h){ // bit is set
+						if(DEBUGMINITIME)Serial.print("1");
+						matrix[z][0]=red;
+						matrix[z][1]=green;
+						matrix[z][2]=blue;
+					} 
+					else { // bit is not set
+						if(DEBUGMINITIME)Serial.print("0");
+						//matrix[z][0]=backred;
+						//matrix[z][1]=backgreen;
+						//matrix[z][2]=backblue;		
+					}	
+			}
+			if(DEBUGMINITIME)Serial.println();
+		}
+	}
+		if(DEBUGMINITIME)Serial.println();
+	}
+}
+
+void buildMiniTimeMatrix(){
+	char fontbyte;
+	int xoffset=8;
+	int yoffset=2;
+	int z=0;
+	int intensity = 128;
+	char backred=0x00;
+	char backgreen=0x04;
+	char backblue=0x04;
+	char red=0xFF;
+	char green = 0xFF;
+	char blue=0xFF;
+	// clear the matrix
+	pelcolour.r=0;
+	pelcolour.g=0;
+	pelcolour.b=0;
+	fillMatrix(pelcolour);
+	// get the time
+	String localtime=timestring();
+	localtime.toCharArray(timearray,7);
+	if(DEBUGMINITIME){
+		Serial.println();
+		Serial.print("minifontwidth:");
+		Serial.println(minifontwidth);
+		Serial.print("minifontheight:");
+		Serial.println(minifontheight);
+		Serial.println("Minitime Local:"+localtime);
+		for(z=0;z<6;z++){
+			Serial.println(timearray[z],HEX);
+		}
+	}
+	// display it in small font
+	int c,w,h;
+	char ch;
+	for(c=0;c<6;c++){ // cycle thru digits
+	ch=timearray[c];
+	if((ch>0x20)&&(ch<0x40)){ // check char is valid
+		for(w=0;w<minifontwidth;w++){
+			fontbyte=font3x5[ch-32][w];
+			
+			for(h=0;h<minifontheight;h++){
+				z=(c*(minifontwidth+1))+((h+yoffset)*32)+w+xoffset;
+					if(fontbyte&1<<h){ // bit is set
+						if(DEBUGMINITIME)Serial.print("1");
+						matrix[z][0]=red;
+						matrix[z][1]=green;
+						matrix[z][2]=blue;
+					} 
+					else { // bit is not set
+						if(DEBUGMINITIME)Serial.print("0");
+						matrix[z][0]=backred;
+						matrix[z][1]=backgreen;
+						matrix[z][2]=backblue;		
+					}	
+			}
+			if(DEBUGMINITIME)Serial.println();
+		}
+	}
+		if(DEBUGMINITIME)Serial.println();
+	}
+	drawgraphs();
+}
+
+void buildBackground(int bgtype){ // 0=bmp 1= temp
+// get max and min
+int hp,x,y,z=0;
+double maxv=-999999;
+double minv=99999;
+double v,range,hv;
+int intensity = 128;
+	char backred=0x00;
+	char backgreen=0x00;
+	char backblue=0x0F;
+	char red=0x00;
+	char green = 0x0F;
+	char blue=0x00;
+
+	for(hp=0;(hp<32)&&(hp<logcounter-1);hp++){ // get the max and min
+			if(bgtype==0)v=BMPPressureHistory[hp];
+			if(bgtype==1)v=BMPTemperatureHistory[hp];
+		if(v!=0){
+			if(v<minv)minv=v;
+			if(v>maxv)maxv=v;
+		}
+	}
+
+	range=maxv-minv; // get the range of values
+	if(DEBUGBACKGROUND){
+		Serial.print("Maxv:");
+		Serial.println(maxv);
+		Serial.print("Minv:");
+		Serial.println(minv);
+		Serial.print("Range:");
+		Serial.println(range);
+	}
+	if(range==0)range=1; // make sure its not zero
+	for(x=0;x<screenwidth;x++){
+		if(bgtype==0)hv=BMPPressureHistory[x];
+		if(bgtype==1)hv=BMPTemperatureHistory[x];
+		v=(hv-minv)/range;
+		v=abs(v)*screenheight;
+		if(v>screenheight)v=screenheight;
+		if(DEBUGBACKGROUND){
+			Serial.print("log:");
+			Serial.print(hv);
+			Serial.print(" scaled:");
+			Serial.println(v);
+		}
+		for(y=0;y<screenheight;y++){
+			z=(y*screenwidth)+x;
+			if(v<y){ //fore-colour
+			matrix[z][0]=red;
+			matrix[z][1]=green;
+			matrix[z][2]=blue;
+			
+			}else{ 	// Back-colour
+			matrix[z][0]=backred;
+			matrix[z][1]=backgreen;
+			matrix[z][2]=backblue;
+			}
+		}
+		
+	}
+	
+}
 
 void buildMatrix(){
 	// finally, if we build a matrix display here it should be sent to the display
 	// if we set displaymode to 0x01
 	// matrix =ColourRGB[256]
-	clearMatrix();  // clear the dot matrix buffer
+	pelcolour.r=0;
+	pelcolour.g=0;
+	pelcolour.b=0;
+	fillMatrix(pelcolour);  // clear the dot matrix buffer
 	
 	//int character = (millis()/displayUpdateInterval % 64); // rotate character
 // start by just copying time chars to buffer
@@ -718,67 +971,72 @@ int offset=8; // shift clock x
 	drawseconds();
 }
 
+/*
 void bannertomatrix(){
-	int bannerlength=banner.length();
-	int bytecount=bannerlength*(fontwidth+1);
-	int x,y,c,b,z,p=0;
-	char fontbyte;
-	int offset=0;
-	int intensity = 128;
-	char backred=0x00;
-	char backgreen=0x04;
-	char backblue=0x04;
-	char red=0xFF;
-	char green = 0xFF;
-	char blue=0xFF;
-	char bannerchar;
-clearMatrix();
-	for(x=0;x<screenwidth;x++){ // move along the x
-		// calculate the bit pattern for the column
-		bannerchar=banner.charAt(((bannerpointer+x)%bytecount)/(fontwidth+1));  // c contains character from banner
-		b=(bannerpointer+x)%(fontwidth+1); // number of bits into the font
-		p=bannerchar-32;
-		if(DEBUGMATRIX){
-			if((x%(fontwidth+1))==0) {
-				Serial.print("Banner Char=");
-				Serial.print(bannerchar,HEX);
-				Serial.print(" Pointer:");
-				Serial.print(p,HEX);
-				Serial.print(" Bits into font=");
-				Serial.println(b,HEX);
-				
+	if(bannervalid){
+		int bannerlength=banner.length();
+		int bytecount=bannerlength*(fontwidth+1);
+		int x,y,c,b,z,p=0;
+		char fontbyte;
+		int offset=0;
+		int intensity = 128;
+		char backred=0x00;
+		char backgreen=0x04;
+		char backblue=0x04;
+		char red=0xFF;
+		char green = 0xFF;
+		char blue=0xFF;
+		char bannerchar;
+		pelcolour.r=backred;
+		pelcolour.g=backgreen;
+		pelcolour.b=backblue;
+		fillMatrix(pelcolour);  // clear the dot matrix buffer
+		for(x=0;x<screenwidth;x++){ // move along the x
+			// calculate the bit pattern for the column
+			bannerchar=banner.charAt(((bannerpointer+x)%bytecount)/(fontwidth+1));  // c contains character from banner
+			b=(bannerpointer+x)%(fontwidth+1); // number of bits into the font
+			p=bannerchar-32;
+			if(DEBUGMATRIX){
+				if((x%(fontwidth+1))==0) {
+					Serial.print("Banner Char=");
+					Serial.print(bannerchar,HEX);
+					Serial.print(" Pointer:");
+					Serial.print(p,HEX);
+					Serial.print(" Bits into font=");
+					Serial.println(b,HEX);
+					
+				}
 			}
-		}
-		if(b==fontwidth){
-			fontbyte=0x00;
-		}else{
-		fontbyte=font_5x7[p][b];	
-		}
-		for(y=0;y<fontheight+1;y++){ // cycle thru bits
-			z=(y*32)+x+offset;
+			if(b==fontwidth){
+				fontbyte=0x00;
+			}else{
+				fontbyte=font_5x7[p][b];	
+			}
+			for(y=0;y<fontheight+1;y++){ // cycle thru bits
+				z=(y*32)+x+offset;
 				if(fontbyte&128>>y){ // bit is set
 					if(DEBUGMATRIX)Serial.print("1");
 					matrix[z][0]=red;
 					matrix[z][1]=green;
 					matrix[z][2]=blue;
 				} 
-				else { // bit is not set
+				 else { // bit is not set
 					if(DEBUGMATRIX)Serial.print("0");
-					matrix[z][0]=backred;
-					matrix[z][1]=backgreen;
-					matrix[z][2]=backblue;		
+				//	matrix[z][0]=backred;
+				//	matrix[z][1]=backgreen;
+				//	matrix[z][2]=backblue;		
 				}	
 			}
-			if(DEBUGMATRIX)Serial.println();
-		
+			if(DEBUGMATRIX)Serial.println();	
+		}
+		drawseconds();
+			
+		// check to see if we're near the end of the message
+		bannerpointer=(bannerpointer+2)%bytecount;	// move the pointer on
+		if(bannerpointer+screenwidth>bytecount)bannerpointer=0;
 	}
-	drawseconds();
-	
-	// check to see if we're near the end of the message
-	bannerpointer++;	// move the pointer on
-	if(bannerpointer+screenwidth>bytecount)bannerpointer=0;
 }
-
+*/
 void drawseconds(){
 	int s=tm.Second;
 	s=s*24/60;
@@ -972,8 +1230,8 @@ void sendclear(int m, int r,int g, int b){ // send clear screen to matrix
 }	
 
 void checktimesync(){
-	if(timeNow>NextTimeSyncTime){
-		NextTimeSyncTime=timeNow+NextTimeSyncInterval;
+	if(millisNow>NextTimeSyncTime){
+		NextTimeSyncTime=millisNow+NextTimeSyncInterval;
 		if(DEBUGTIME)Serial.println("syncing time <*****************************************");
 		// Time precedence
 		// GPS if Valid
@@ -1028,23 +1286,37 @@ void checkDisplayTimer(){
   }
   if(tm.Minute!=lastminute){
 	  lastminute=tm.Minute;
-	  buildMatrix(); // build the raster to display on the matrix
-	  if(MATRIXENABLED)sendToMatrix();
-	  displayNextUpdateTime=millisNow+displayUpdateInterval; // reset LED display timer
+	//  buildMatrix(); // build the raster to display on the matrix
+	//  if(MATRIXENABLED)sendToMatrix();
+	//  displayNextUpdateTime=millisNow+displayUpdateInterval; // reset LED display timer
   }
   if(millisNow>displayNextUpdateTime){
 	  displayNextUpdateTime=millisNow+displayUpdateInterval; // reset LED display timer
-	  if(MARQUEEENABLED)buildmarquee();
+	  //if(MARQUEEENABLED)buildmarquee();
 	  
 	  // change the display based on the seconds count
-	  if((tm.Second<5)||(tm.Second>55)){
-	  buildMatrix(); // build the raster to display on the matrix
+	  if((tm.Second<3)||(tm.Second>57)){
+	    buildMiniTimeMatrix();
+		
 	  } else{
-		  if(MARQUEEENABLED){
-			  bannertomatrix();
-		}else{
-				  buildMatrix();
-		}
+		  
+		  if((tm.Second<8)||(tm.Second>52)){
+		buildMatrix(); // build the raster to display on the matrix
+	  	   
+		  } 		  else{
+			  if((tm.Second<25)||(tm.Second>35)){
+				  dtostrf(BMPtemperature,3,2,matrixMessage);
+					buildBackground(1);
+					writeMatrixSmall(matrixMessage);
+			  } else{
+				// 	write pressure in mini font
+					//sprintf(displaythis,"%f",BMPpressure);
+					dtostrf(BMPpressure,4,1,matrixMessage);
+					buildBackground(0);
+					writeMatrixSmall(matrixMessage);
+			  } 
+		  }
+		
 	  }
 	  
 	  if(MATRIXENABLED)sendToMatrix();
@@ -1055,30 +1327,32 @@ void buildmarquee(){
 	//String m;
 	// String msg = String("initialising marquee                                                           ");
 	//msg = timestring();
+	
 	BMPpressure=getPressure(); // get the current pressure
-			BMPaltitude=pressure_sensor.altitude(BMPpressure,BMPbaselinepressure);
-			Serial.println("Altitude:"+String(BMPaltitude)+" Temperature:"+String(BMPtemperature));
+	BMPaltitude=pressure_sensor.altitude(BMPpressure,BMPbaselinepressure);
 			
-	banner=String("S+P :");
-	banner+= hour(timeNow);
-    banner+=":";
-	banner= String(banner+String(minute(timeNow)));
-      banner=String(banner+String(":"));
-	  banner= String(banner+String(second(timeNow)));  
-			if(isAM(timeNow)) banner=String(banner+"AM ");
-			if(isPM(timeNow)) banner=String(banner+"PM ");
-			banner=String(banner+dayShortStr(weekday(timeNow))+" ");
-			banner=String(banner+String(day(timeNow))+" "+String(monthShortStr(month(timeNow)))+" "+String(year(timeNow)));
+	//banner=String("S+P :");
+	//banner+="Alt:"+String(BMPaltitude)+"m Tmp:"+String(BMPtemperature);
+	//banner+= hour(timeNow);
+    //banner+=":";
+	//banner= String(banner+String(minute(timeNow)));
+    //  banner=String(banner+String(":"));
+	//  banner= String(banner+String(second(timeNow)));  
+	//		if(isAM(timeNow)) banner=String(banner+"AM ");
+	//		if(isPM(timeNow)) banner=String(banner+"PM ");
+
+	//banner+=datestring();
+	//banner+=" ";
+	//banner+=String(BMPpressure);
+	//banner+="mb";
 	// banner = String(banner+" End of Message");
+	//if(banner.length()<64)bannervalid=true;
 	
 }
 
 void checkReport() {
 		if( millisNow> reportTime){ // if we're due
 			reportTime=millisNow+reportInterval; // reset interval
-			Serial.println("*******************************");
-			if(MARQUEEENABLED)Serial.println("Marquee:");
-			if(MARQUEEENABLED)Serial.println(String(banner));
 			Serial.println("*******************************");
 			
 			Serial.print("Onboard Clock:"+String(hour(timeNow))+":"+ String(minute(timeNow))) +":"+ String(second(timeNow));  // Print system time
@@ -1125,12 +1399,9 @@ void checkReport() {
 			BMPpressure=getPressure(); // get the current pressure
 			BMPaltitude=pressure_sensor.altitude(BMPpressure,BMPbaselinepressure);
 			Serial.println("Altitude:"+String(BMPaltitude)+" Temperature:"+String(BMPtemperature));
-			Serial.println("Sync:"+String(NextTimeSyncTime-timeNow));
+			Serial.println("Sync:"+String(NextTimeSyncTime-millisNow));
 		
-			if(DEBUGMARQUEE){
-				Serial.print("BannerPointer:");
-				Serial.println(bannerpointer,DEC);
-			}
+			
 		}
 		
 		
@@ -1171,6 +1442,18 @@ void drawToModule(){
 
 String timestring()   {
 return twochars(tm.Hour)+twochars(tm.Minute)+twochars(tm.Second);
+}
+
+String datestring(){
+	String thisstring;
+		thisstring=dayShortStr(weekday(timeNow));
+			thisstring+=" ";
+			thisstring+=String(day(timeNow));
+			thisstring+=" ";
+			thisstring+=String(monthShortStr(month(timeNow)));
+			thisstring+=" ";
+			thisstring+=String(year(timeNow));
+	return thisstring;
 }
 String twochars(int number){
 	if(number==0) {
@@ -1486,7 +1769,6 @@ void GPSParser(){
 				Serial.println(String(String(i)+':'+Arg[i]));
 			}
 		}
-	
 	}
 	argcount = pc;
 }
