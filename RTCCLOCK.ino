@@ -213,7 +213,7 @@ const unsigned char font3x5[][3]={
         { 0x31, 0x10, 0x31 },               /* # - 0x23 - 35 */
         { 0x24, 0x2a, 0x7f },               /* $ - 0x24 - 36 */
         { 0x23, 0x13, 0x08 },               /* % - 0x25 - 37 */
-        { 0x08, 0x20, 0x08 },               /* o - 0x26 - 38 */
+        { 0x08, 0x14, 0x08 },               /* o - 0x26 - 38 */
         { 0x00, 0x05, 0x03 },               /* ' - 0x27 - 39 */
         { 0x00, 0x1c, 0x22 },               /* ( - 0x28 - 40 */
         { 0x00, 0x41, 0x22 },               /* ) - 0x29 - 41 */
@@ -1318,7 +1318,7 @@ void checkDisplayTimer(){
 		  } 		  else{
 			  if((tm.Second<25)||(tm.Second>35)){
 				  dtostrf(BMPtemperature,3,2,matrixMessage);
-				  matrixMessage[5]=0x38;
+				  matrixMessage[5]=0x26;
 					buildBackground(1);
 					writeMatrixSmall(matrixMessage,2);
 					drawseconds(32,0);
