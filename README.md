@@ -1,6 +1,7 @@
 # Arduino-MEGA-GPS-RTC-I2C-Sender-for-Colorduino
-Arduino MEGA reads GPS, sets RTC, sends via I2C to Colorduino
- Stuarts code to drive u lox GPS DS1307 RTC and TM1638 Display
+Arduino MEGA reads GPS, sets RTC, sends via I2C to Colorduino.
+
+ Stuarts code to drive ublox GPS DS1307 RTC and TM1638 Display
 
     Reads the RTC 
 
@@ -12,8 +13,10 @@ Arduino MEGA reads GPS, sets RTC, sends via I2C to Colorduino
     Added I2C display module handler
     Added local BMP180 module
     Added watchdog
+    Logging bmp and temperature
+    Background graphic from log
 
-Currently working on nrf24 connection for remote sensors
+
  RF24 setup ok
 
 Need GMT
