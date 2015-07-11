@@ -31,7 +31,7 @@ OK: make packets fixed length = 16 bytes
 OK: stx,type,index,data*11,chk,cr
 OK: sending char packets
 XX: BST offset
-XX: RF handler
+OK: RF handler
 OK: Temperature from thermistor on AO
 OK: adding bmp180 module
 OK: startup time from rtc 
@@ -40,7 +40,9 @@ OK: Added debug modes to clear serial noise
 OK: Added gps handler
 OK: Added I2C display module handler
 OK: watchdog - timer working
-XX: self reset
+OK: self reset
+OK: brightness
+
 */
 
 
@@ -56,14 +58,13 @@ XX: self reset
 #define DEBUGMATRIX false
 #define DEBUGGPS false
 #define DEBUGREPORT true
-#define DEBUGINBOX true
+#define DEBUGINBOX false
 #define DEBUGTIME false
 #define DEBUGBMP true
 #define DEBUGMINITIME false
 #define MATRIXENABLED true
 #define RFENABLED true
 #define DEBUGRF false
-#define DEBUGMATRIXMESSAGE true
 // GPS Definitions
 #define GPSBUFFERLEN 128
 #define ARGCOUNT 40
@@ -71,7 +72,7 @@ XX: self reset
 #define MAGNOADDRESS 0x1e
 #define MAXERRORCOUNT 5
 //#define MAXMOUNTMSGLEN 128
-#define GPSPASSTHRU false  // enable pass-thru of GPS data so PC sees GPS
+#define GPSPASSTHRU true  // enable pass-thru of GPS data so PC sees GPS
 
 #define FIRSTMODULE 4  // i2c address of 1st module
 #define LASTMODULE 7	// i2c address of last module
@@ -213,7 +214,7 @@ const unsigned char font3x5[][3]={
         { 0x31, 0x10, 0x31 },               /* # - 0x23 - 35 */
         { 0x24, 0x2a, 0x7f },               /* $ - 0x24 - 36 */
         { 0x23, 0x13, 0x08 },               /* % - 0x25 - 37 */
-        { 0x08, 0x14, 0x08 },               /* o - 0x26 - 38 */
+        { 0x08, 0x14, 0x08 },               /* o degrees- 0x26 - 38 */
         { 0x00, 0x05, 0x03 },               /* ' - 0x27 - 39 */
         { 0x00, 0x1c, 0x22 },               /* ( - 0x28 - 40 */
         { 0x00, 0x41, 0x22 },               /* ) - 0x29 - 41 */
@@ -330,7 +331,7 @@ const unsigned char font_5x7[][5] = { // Font Table
         { 0x00, 0x08, 0x36, 0x41, 0x00 },               /* { - 0x7b - 123 */
         { 0x00, 0x00, 0x7f, 0x00, 0x00 },               /* | - 0x7c - 124 */
         { 0x00, 0x41, 0x36, 0x08, 0x00 },               /* } - 0x7d - 125 */
-        { 0x10, 0x08, 0x08, 0x10, 0x08 },               /* ~ - 0x7e - 126 */
+        { 0x1C, 0x3E, 0x0F, 0x3E, 0x1C },               /* heart - 0x7e - 126 */
 };
 
 char matrixMessage[64];
@@ -338,6 +339,11 @@ int matrixMessagePointer=0; // pointer into banner messsage for marquee display
 boolean matrixMessageValid=false;
 int matrixMessageCursor=0; 
 unsigned int brightness=0xff; // brightness mask for display
+unsigned int inboxlow=0xff; // lowest inbox reading
+unsigned int inboxhigh=0x00; // 
+unsigned int maxbrightness=0xff; // maximum brightness mask for display
+unsigned int minbrightness=0x02; // min brightness mask for display
+unsigned int contrast=0x40; // subtracted from brightness to give background
 
 /****************************************************************************/
 /*																			*/
@@ -349,22 +355,30 @@ void checkinboxsensor(){  // reads the inbox sensor pin
 	if(millisNow>inboxchecktime){
 		inboxchecktime+=inboxcheckinterval;
 		inboxsensor=analogRead(INBOXPIN);
-		unsigned int v=inboxsensor>>2;
-		
-		if(v<0)v=0;
-		if(v>255)v=255;
-		v=255-v;
-		if(v<0)v=0;
-		brightness=v;
+		brightness=map(inboxsensor,0,1023,maxbrightness,minbrightness);
+		constrain(brightness,0,255);
+		contrast=brightness*31/32;
 		if(DEBUGINBOX){
-			Serial.print("In Box Sensor V:");
+			Serial.print("In Box Value:");
 			Serial.println(inboxsensor,DEC);
 			Serial.print("Brightness:");
-			Serial.println(brightness,HEX);
+			Serial.println(brightness,DEC);
+			Serial.print("Contrast:");
+			Serial.println(contrast,DEC);
+			
 			
 		}
 	}
 }
+
+ boolean isbst(int day, int month, int dow){ // checks if date is in bst
+        if (month < 3 || month > 10)  return false; 
+        if (month > 3 && month < 10)  return true; 
+        int previousSunday = day - dow;
+        if (month == 3) return previousSunday >= 25;
+        if (month == 10) return previousSunday < 25;
+        return false; // this line never gonna happen
+    }
 
 void gettime(){ //			Loads all of the time variables from GPS>RTC>System clock		//
 
@@ -388,6 +402,14 @@ void gettime(){ //			Loads all of the time variables from GPS>RTC>System clock		
 		t=t % 100;
 		t=t+2000-1970;
 		tm.Year =	t;
+		if(isbst(tm.Day,tm.Month,weekday(timeNow))){
+			tm.Hour=tm.Hour+1;
+			if(DEBUGTIME)Serial.println("Date is in BST");
+		
+		}else{
+			if(DEBUGTIME)Serial.println("Date is not in BST");
+		
+		};
 	}	
 	else{
 		// get rtc time instead
@@ -778,6 +800,63 @@ void writeMatrixSmall(char displayarray[], int xoffset){
 	}
 }
 
+void writeMatrixLarge(char displayarray[],int charcount, int xoffset, char red,char green,char blue){ // message ,count, offset, r,g,b
+	char fontbyte;
+	
+	int yoffset=0;
+	int z=0;
+	
+	//char red=brightness;
+	//char green = brightness;
+	//char blue=brightness;
+	
+	if(DEBUGMINITIME){
+		Serial.println();
+		Serial.print("fontwidth:");
+		Serial.println(fontwidth);
+		Serial.print("fontheight:");
+		Serial.println(fontheight);
+		Serial.print("Length:");
+		Serial.println(charcount,DEC);
+		
+		for(z=0;z<6;z++){
+			Serial.println(displayarray[z],HEX);
+		}
+	}
+	// display it in large font
+	int c,w,h;
+	char ch;
+	int numchars=screenwidth/(fontwidth+1)+1;
+	if(charcount>numchars)charcount=numchars;
+	for(c=0;c<charcount;c++){ // cycle thru digits
+	ch=displayarray[c];
+	if((ch>0x20)&&(ch<0x7f)){ // check char is valid
+		for(w=0;w<fontwidth;w++){
+			fontbyte=font_5x7[ch-32][w];		
+			for(h=0;h<fontheight;h++){
+				z=(c*(fontwidth+1))+((h+yoffset)*32)+w+xoffset;
+					if(z<256){
+					if(fontbyte&1<<h){ // bit is set
+						if(DEBUGMINITIME)Serial.print("1");
+						matrix[z][0]=red ;
+						matrix[z][1]=green;
+						matrix[z][2]=blue ;
+					} 
+					else { // bit is not set
+						if(DEBUGMINITIME)Serial.print("0");
+						//matrix[z][0]=backred;
+						//matrix[z][1]=backgreen;
+						//matrix[z][2]=backblue;		
+					}
+					}	
+			}
+			if(DEBUGMINITIME)Serial.println();
+		}
+	}
+		if(DEBUGMINITIME)Serial.println();
+	}
+}
+
 void buildMiniTimeMatrix(){
 	char fontbyte;
 	int xoffset=8;
@@ -836,7 +915,7 @@ void buildMiniTimeMatrix(){
 	}
 		if(DEBUGMINITIME)Serial.println();
 	}
-	drawgraphs();
+	
 }
 
 void buildBackground(int bgtype){ // 0=bmp 1= temp
@@ -848,9 +927,9 @@ double v,range,hv;
 
 	char backred=0x00;
 	char backgreen=0x00;
-	char backblue=brightness>>4 ;
+	char backblue=brightness-contrast ;
 	char red=0x00;
-	char green = brightness>>4 ;
+	char green = brightness-contrast ;
 	char blue=0x00;
 
 	for(hp=0;(hp<32)&&(hp<logcounter-1);hp++){ // get the max and min
@@ -873,8 +952,8 @@ double v,range,hv;
 	}
 	if(range==0)range=1; // make sure its not zero
 	for(x=0;x<screenwidth;x++){
-		if(bgtype==0)hv=BMPPressureHistory[x];
-		if(bgtype==1)hv=BMPTemperatureHistory[x];
+		if(bgtype==0)hv=BMPPressureHistory[screenwidth-x];
+		if(bgtype==1)hv=BMPTemperatureHistory[screenwidth-x];
 		v=(hv-minv)/range;
 		v=abs(v)*screenheight;
 		if(v>screenheight)v=screenheight;
@@ -973,10 +1052,7 @@ int offset=8; // shift clock x
 			if(DEBUGMATRIX)Serial.println();
 		}
 	}
-	// Draw temperature graph
-	drawgraphs(); 
-	drawseconds(32,0);
-}
+	}
 
 /*
 void bannertomatrix(){
@@ -1104,8 +1180,9 @@ void drawgraphs(){
 		}
 	}
 	// now the pressure
-	z=BMPpressure-BMPbaselinepressure;
-	z=4/z+4;
+	z=(BMPpressure-960)*screenheight/80;
+	if(z<0)z=0;
+	if(z>screenheight)z=screenheight;
 	for(y=0;y<8;y++){
 		if(y<z){
             matrix[y*32+6][1]=brightness;
@@ -1291,6 +1368,7 @@ void checktimesync(){
 }
 	
 void checkDisplayTimer(){
+	
   if (millisNow > waitcheckTime) {
     dots = !dots;
     drawToModule();
@@ -1307,35 +1385,81 @@ void checkDisplayTimer(){
 	  //if(MARQUEEENABLED)buildmarquee();
 	  
 	  // change the display based on the seconds count
-	  if((tm.Second<3)||(tm.Second>57)){
-	    buildMiniTimeMatrix();
-		
-	  } else{
+	  int timediv=(tm.Second +3)  /6 % 5;
+	 
+	 buildmatrixdisplay(timediv);
+	
+	  if(MATRIXENABLED)sendToMatrix();
+  }
+}
+
+void buildmatrixdisplay(int type){
+	// 0 = Big Time
+	// 1 = Mini Time
+	// 3 = pressure
+	// 4 = temperature
+	
+	
+	 switch(type){
+		  case 0: {
+			  buildMiniTimeMatrix();
+	// Draw temperature graph
+	drawgraphs(); 
+	drawseconds(32,0);
 		  
-		  if((tm.Second<8)||(tm.Second>52)){
-		buildMatrix(); // build the raster to display on the matrix
-	  	   
-		  } 		  else{
-			  if((tm.Second<25)||(tm.Second>35)){
-				  dtostrf(BMPtemperature,3,2,matrixMessage);
+			  break;
+		  }
+		  case 1:{
+			  buildMatrix();
+// Draw temperature graph
+	drawgraphs(); 
+	drawseconds(32,0);
+
+			  break;
+		  }
+		  
+		  case 2: {
+			 dtostrf(BMPtemperature,3,2,matrixMessage);
 				  matrixMessage[5]=0x26;
 					buildBackground(1);
 					writeMatrixSmall(matrixMessage,2);
 					drawseconds(32,0);
-			  } else{
-				// 	write pressure in mini font
+					matrixMessage[0]=0x7e;
+					int se=tm.Second&0x01;
+					se=se+25;
+					writeMatrixLarge(matrixMessage,1,se,0xff,0x00,0x00);// message ,count, offset, r,g,b  
+			  break;
+		  }
+		  
+		  case 3: {
+			  // 	write pressure in mini font
 					//sprintf(displaythis,"%f",BMPpressure);
 					dtostrf(BMPpressure,4,1,matrixMessage);
 					buildBackground(0);
 					writeMatrixSmall(matrixMessage,2);
 					drawseconds(32,0);
-			  } 
+			  break;
 		  }
-		
+		  
+		  case 4: {
+			 dtostrf(BMPtemperature,3,2,matrixMessage);
+				  matrixMessage[5]=0x26;
+					buildBackground(1);
+					writeMatrixSmall(matrixMessage,2);
+					drawseconds(32,0);
+					matrixMessage[0]=0x7e;
+					int se=tm.Second&0x01;
+					se=se+25;
+					writeMatrixLarge(matrixMessage,1,se,0xff,0x00,0x00);// message ,count, offset, r,g,b  
+			  
+			  break;
+		  }
+		  
+		  default :{
+			  buildMiniTimeMatrix();
+			  break;
+		  }
 	  }
-	  
-	  if(MATRIXENABLED)sendToMatrix();
-  }
 }
 
 void buildmarquee(){
