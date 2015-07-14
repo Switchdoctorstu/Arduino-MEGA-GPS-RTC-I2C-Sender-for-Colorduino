@@ -1,5 +1,6 @@
 # Arduino-MEGA-GPS-RTC-I2C-Sender-for-Colorduino
 
+Stuarts code to drive ublox GPS DS1307 RTC and TM1638 Display
 
 A project to build a household clock using a GPS reciever as the time source.
 
@@ -11,23 +12,21 @@ I used a mega to give me enough serial ports to link in the gps and still have u
 
 Arduino MEGA reads GPS, sets RTC, sends via I2C to Colorduino.
 
- Stuarts code to drive ublox GPS DS1307 RTC and TM1638 Display
-
-    Reads the RTC 
-
+    If (it can)  reads GPS time and date
+    else     Reads the RTC 
     Displays time on TM1638
     Handles reset of RTC
     Handles button updates to RTC
     Added debug mode to clear serial noise
-    Added gps handler
+    Added better gps handler
     Added I2C display module handler
     Added local BMP180 module
     Added watchdog
     Logging bmp and temperature
     Background graphic from log
+	Added RF24 for remote logging
 
 
- RF24 setup ok
 
 *known bugs:*
 
@@ -43,3 +42,6 @@ GMT is sort of working but crudely adds an hour to the current hour and takes no
     }
 
 
+ RF24 setup ok
+Haven't completed the remote logging yet. I'll add the remote station code when i've completed it.
+The RF sets up ok and listens for remote stations.
