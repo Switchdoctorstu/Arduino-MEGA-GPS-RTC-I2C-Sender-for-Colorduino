@@ -60,7 +60,7 @@ OK: brightness
 #define DEBUGREPORT true
 #define DEBUGINBOX false
 #define DEBUGTIME false
-#define DEBUGBMP true
+#define DEBUGBMP false
 #define DEBUGMINITIME false
 #define MATRIXENABLED true
 #define RFENABLED true
@@ -107,7 +107,7 @@ const uint64_t send_pipes[5] = { 0xF0F0F0F0D2LL, 0xF0F0F0F0C3LL, 0xF0F0F0F0B4LL,
 const uint64_t receive_pipes[5] = { 0x3A3A3A3AD2LL, 0x3A3A3A3AC3LL, 0x3A3A3A3AB4LL, 0x3A3A3A3AA5LL, 0x3A3A3A3A96LL };
 char RFpacketout[8]; // RF packet buffers
 char RFpacketin[8]; // RF packet buffers
-unsigned long RFinterval=30055; // 30 second RF poll
+unsigned long RFinterval=60055; // 30 second RF poll
 unsigned long RFtimer; // Poll timer
 
 struct sRGB{
@@ -142,15 +142,15 @@ unsigned long waitcheckButtons=0; // timer for buttons
 unsigned long intervalcheckTime=1012;
 unsigned long intervalcheckButtons=503;
 unsigned long reportTime=1007;
-unsigned long reportInterval=5007;
+unsigned long reportInterval=10007;
 unsigned long gapSecond=0;
 unsigned long lasttime=0;
 unsigned long thistime=0;	// Time handles
 unsigned long millisNow=0;
 unsigned long NextTimeSyncTime=0;
-unsigned long NextTimeSyncInterval=10023; // 10 seconds
+unsigned long NextTimeSyncInterval=60023; // 30 seconds
 unsigned long displayNextUpdateTime=0;
-unsigned long displayUpdateInterval=513; // 5 seconds
+unsigned long displayUpdateInterval=913; // 0.9 seconds
 boolean dots=0;
 boolean moduleOff=0;
 // setup mode 
@@ -380,28 +380,38 @@ void checkinboxsensor(){  // reads the inbox sensor pin
         return false; // this line never gonna happen
     }
 
+tmElements_t bstadjust(tmElements_t checkElements){
+	if(isbst(checkElements.Day,checkElements.Month,weekday())){
+		
+	}
+}	
+
 void gettime(){ //			Loads all of the time variables from GPS>RTC>System clock		//
 
 	millisNow=millis(); // timer for local loop triggers
 	timeNow=now(); // get the current time stamp
   // get hrs and mins in usable format
-	if(gpsfixvalid=="A"){  // check for valid time from GPS
+	if(gpsfixvalid=="A"||gpsfixvalid=="V"){  // check for valid time from GPS
 		gpsfixtime.toCharArray(timearray,6);
 		currentmode=GPSMODE;
-		long int t=gpsfixtime.toInt();
-		if(DEBUGTIME)Serial.println("GPS Fix Time" + gpsfixtime  + "  ToInt:" + String(t));
-		tm.Hour=t/10000;
-		t=t % 10000; // mod 10000
-		tm.Minute=t/100;
-		t=t % 100;
-		tm.Second=t;
-		t=gpsfixdate.toInt();
-		tm.Day = t/10000;
-		t=t % 10000;
-		tm.Month = t/100;
-		t=t % 100;
-		t=t+2000-1970;
-		tm.Year =	t;
+		if(gpsfixtime!=""){
+			long int t=gpsfixtime.toInt();
+			if(DEBUGTIME)Serial.println("GPS Fix Time" + gpsfixtime  + "  ToInt:" + String(t));
+			tm.Hour=t/10000;
+			t=t % 10000; // mod 10000
+			tm.Minute=t/100;
+			t=t % 100;
+			tm.Second=t;
+		}
+		if(gpsfixdate!=""){
+			long int t=gpsfixdate.toInt();
+			tm.Day = t/10000;
+			t=t % 10000;
+			tm.Month = t/100;
+			t=t % 100;
+			t=t+2000-1970;
+			tm.Year =	t;
+		}
 		if(isbst(tm.Day,tm.Month,weekday(timeNow))){
 			tm.Hour=tm.Hour+1;
 			if(DEBUGTIME)Serial.println("Date is in BST");
@@ -1730,9 +1740,6 @@ void buttonEvent(byte inp){
   }
 }
 
-// getrtctime
-// returns time as a 6 character string with zero padding on seconds and minutes
-
 void setupRTC() {// reset the RTC
 	bool parse=false;
 	bool config=false;
@@ -1872,8 +1879,12 @@ void GPSParser(){
 		Serial.print(mlen);
 		Serial.println(s1);
 	}
-	pc=0; // reset parm counter
 	cp2=0; 
+	for(pc=0;pc<10;pc++){
+		Arg[pc]="";
+	}
+	pc=0; // reset parm counter
+	
 	int lastcommapos=s1.lastIndexOf(',');
 	// do we have commas?
 	if(lastcommapos>0){
@@ -1963,6 +1974,15 @@ Where:
 			gpslat=Arg[2];
 			gpslatort = Arg[3];
 			gpsfixdate=Arg[8];
+			gpslong=Arg[4]; // gps longitude
+			gpslongort = Arg[5];  // gps longitude compass
+			
+		} 
+		if(gpsfixvalid=="V"){
+			gpsfixtime=Arg[0];
+			gpslat=Arg[2];
+			gpslatort = Arg[3];
+			if(Arg[8]!="")gpsfixdate=Arg[8];
 			gpslong=Arg[4]; // gps longitude
 			gpslongort = Arg[5];  // gps longitude compass
 			
